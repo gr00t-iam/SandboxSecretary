@@ -8,7 +8,7 @@ export class AudioPipeline {
     this.onTranscriptCallback = onTranscript;
   }
 
-  // Provide a clean, public initialization interface if your UI setup calls it explicitly
+  // Explicit initialization hook required by your UI loader
   public async initialize(): Promise<void> {
     console.log("Audio pipeline initialized securely.");
   }
@@ -17,7 +17,7 @@ export class AudioPipeline {
     this.context = new AudioContext({ sampleRate: 16000 });
     this.stream = await navigator.mediaDevices.getUserMedia({ audio: true });
     
-    // Path fixed explicitly for GitHub Pages project subfolder routing
+    // Path fixed explicitly for GitHub Pages subfolder routing
     await this.context.audioWorklet.addModule('/SandboxSecretary/audio-downsampler.worklet.js');
     
     const source = this.context.createMediaStreamSource(this.stream);
@@ -46,7 +46,7 @@ export class AudioPipeline {
     const rms = Math.sqrt(sum / samples.length);
     
     if (rms > 0.01) {
-      // Stream instant dictation strings directly back to the UI engine
+      // Safely updates your UI status without throwing type errors
       this.onTranscriptCallback("Microphone connection stable! Voice engine running locally.");
     }
   }
