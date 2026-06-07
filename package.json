@@ -1,0 +1,42 @@
+{
+  "name": "sandbox-secretary",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Local-first offline PWA for client-side dictation, translation, polishing, and sync staging.",
+  "license": "MIT",
+  "scripts": {
+    "dev": "vite --host 127.0.0.1",
+    "build": "tsc -b && vite build",
+    "preview": "vite preview --host 127.0.0.1",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "lint": "eslint ."
+  },
+  "dependencies": {
+    "@mlc-ai/web-llm": "^0.2.79",
+    "@vitejs/plugin-react": "^5.0.0",
+    "@huggingface/transformers": "^4.2.0",
+    "idb": "^8.0.3",
+    "lucide-react": "^0.468.0",
+    "react": "^18.3.1",
+    "react-dom": "^18.3.1"
+  },
+  "devDependencies": {
+    "@eslint/js": "^9.16.0",
+    "@testing-library/jest-dom": "^6.6.3",
+    "@testing-library/react": "^16.1.0",
+    "@types/react": "^18.3.12",
+    "@types/react-dom": "^18.3.1",
+    "@vitejs/plugin-react-swc": "^3.7.2",
+    "eslint": "^9.16.0",
+    "eslint-plugin-react-hooks": "^5.1.0",
+    "eslint-plugin-react-refresh": "^0.4.16",
+    "fake-indexeddb": "^6.0.0",
+    "jsdom": "^25.0.1",
+    "typescript": "^5.6.3",
+    "typescript-eslint": "^8.17.0",
+    "vite": "^6.0.3",
+    "vitest": "^2.1.8"
+  }
+}

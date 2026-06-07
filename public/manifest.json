@@ -1,0 +1,19 @@
+{
+  "name": "Sandbox Secretary",
+  "short_name": "Secretary",
+  "description": "Offline-first dictation, translation, polishing, and sync staging workspace.",
+  "start_url": "/",
+  "scope": "/",
+  "display": "standalone",
+  "background_color": "#f7faf9",
+  "theme_color": "#0b1414",
+  "orientation": "any",
+  "icons": [
+    {
+      "src": "/icons/icon.svg",
+      "sizes": "any",
+      "type": "image/svg+xml",
+      "purpose": "any maskable"
+    }
+  ]
+}

@@ -1,0 +1,6 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 128 128" role="img" aria-label="Sandbox Secretary icon">
+  <rect width="128" height="128" rx="24" fill="#0b1414"/>
+  <path d="M32 37c0-5 4-9 9-9h33c14 0 26 12 26 26v37c0 5-4 9-9 9H58c-14 0-26-12-26-26V37Z" fill="#dff8ee"/>
+  <path d="M46 48h34M46 64h40M46 80h26" stroke="#0b7670" stroke-width="8" stroke-linecap="round"/>
+  <circle cx="91" cy="91" r="14" fill="#f6bd60"/>
+</svg>

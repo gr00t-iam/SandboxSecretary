@@ -1,0 +1,47 @@
+import { describe, expect, it, vi } from 'vitest';
+import { SecretaryStorage } from './storage';
+import { SyncManager } from './sync';
+
+describe('SyncManager', () => {
+  it('creates a mailto export and marks the document as synced', async () => {
+    const storage = new SecretaryStorage(`sandbox-secretary-sync-test-${crypto.randomUUID()}`);
+    await storage.saveDocument({
+      raw_transcript: 'raw',
+      polished_text: '# Notes\n\nSend update.',
+      source_lang: 'en',
+      target_lang: 'en',
+      sync_status: 'pending',
+      sync_destination: { type: 'email', path_or_recipient: 'ops@example.test' },
+      title: 'Ops note'
+    });
+    const openMailto = vi.fn();
+    const sync = new SyncManager(storage, { isOnline: () => true, openMailto });
+
+    const result = await sync.flushPending();
+
+    expect(result.synced).toBe(1);
+    expect(openMailto.mock.calls[0][0]).toContain('mailto:ops%40example.test');
+    const metrics = await storage.getMetrics();
+    expect(metrics.synced).toBe(1);
+  });
+
+  it('leaves drive uploads pending when no OAuth token is available', async () => {
+    const storage = new SecretaryStorage(`sandbox-secretary-sync-test-${crypto.randomUUID()}`);
+    await storage.saveDocument({
+      raw_transcript: 'raw',
+      polished_text: 'draft',
+      source_lang: 'en',
+      target_lang: 'en',
+      sync_status: 'pending',
+      sync_destination: { type: 'gdrive', path_or_recipient: 'folder-id' },
+      title: 'Drive note'
+    });
+    const sync = new SyncManager(storage, { isOnline: () => true, openMailto: vi.fn() });
+
+    const result = await sync.flushPending();
+
+    expect(result.failed).toBe(1);
+    const metrics = await storage.getMetrics();
+    expect(metrics.failed).toBe(1);
+  });
+});
