@@ -28,6 +28,7 @@ describe('standalone Sandbox Secretary artifact', () => {
       'SandboxSecretaryDB',
       'documents',
       'glossary',
+      'config',
       'createWorkerBlob',
       'applyGlossary',
       'uploadGoogleDriveMultipart',
@@ -38,6 +39,35 @@ describe('standalone Sandbox Secretary artifact', () => {
       'visibilitychange',
       'pagehide',
       'drawMeter'
+    ].forEach((marker) => expect(html).toContain(marker));
+  });
+
+  it('uses a clean two-view workspace with advanced controls hidden in settings', () => {
+    [
+      'Workspace View',
+      'settingsToggle',
+      'App Settings',
+      'Your Words',
+      'Polished Text',
+      'Polish Text',
+      'Writing Style Preferences',
+      'Word Auto-Correct Glossary',
+      'Cloud Accounts & Export destinations',
+      'Advanced Engine Diagnostics'
+    ].forEach((marker) => expect(html).toContain(marker));
+
+    expect(html).not.toContain('State machine');
+    expect(html).not.toContain('Execution log</div>');
+  });
+
+  it('persists Drive credentials as a one-time configuration with reset support', () => {
+    [
+      'saveDriveCredentials',
+      'loadDriveCredentials',
+      'resetCredentials',
+      'Credentials Saved',
+      'Authorize',
+      'Reset Credentials'
     ].forEach((marker) => expect(html).toContain(marker));
   });
 });
