@@ -1,23 +1,8 @@
-import {
-  Activity,
-  Cloud,
-  CloudOff,
-  FileText,
-  FolderUp,
-  Languages,
-  Mail,
-  Mic,
-  Pause,
-  Play,
-  Save,
-  Send,
-  SlidersHorizontal,
-  Sparkles
-} from 'lucide-react';
+import { Activity, Cloud, CloudOff, FileText, FolderUp, Languages, Mail, Mic, Pause, Play, Save, Send, SlidersHorizontal, Sparkles } from 'lucide-react';
 import { useEffect, useMemo, useRef, useState } from 'react';
 import type { CacheMetrics, ModelState, PolishOptions, SecretaryDocument, SyncDestination } from '../types';
 import { AiWorkerClient } from '../services/aiWorkerClient';
-import { AudioCaptureController } from '../services/audioPipeline';
+import { AudioPipeline } from '../services/audioPipeline';
 import { createDriveAuthorizationUrl, exchangeDriveAuthorizationCode, readAuthorizationCodeFromLocation } from '../services/oauth';
 import { registerServiceWorker, subscribeToNetworkStatus } from '../services/pwa';
 import { SecretaryStorage } from '../services/storage';
@@ -40,9 +25,11 @@ export function App(): JSX.Element {
   const [online, setOnline] = useState(navigator.onLine);
   const [state, setState] = useState<ModelState>('model-initializing');
   const [warnings, setWarnings] = useState<string[]>([]);
+  
   const [rawText, setRawText] = useState('');
   const [polishedText, setPolishedText] = useState('');
   const [translatedText, setTranslatedText] = useState('');
+  
   const [sourceLang, setSourceLang] = useState('en');
   const [targetLang, setTargetLang] = useState('es');
   const [destinationType, setDestinationType] = useState<SyncDestination['type']>('email');
@@ -51,24 +38,17 @@ export function App(): JSX.Element {
   const [driveClientId, setDriveClientId] = useState('');
   const [driveAccessToken, setDriveAccessToken] = useState('');
   const [polishOptions, setPolishOptions] = useState<PolishOptions>({ concise: 55, structure: 80, tone: 45 });
+  
   const [recording, setRecording] = useState(false);
   const [level, setLevel] = useState(0);
   const [selectedId, setSelectedId] = useState<string>();
-
+  
   const aiClient = useRef<AiWorkerClient>();
-  const audioController = useRef<AudioCaptureController>();
-  const transcriptBuffer = useRef<Float32Array[]>([]);
-
-  const syncManager = useMemo(
-    () =>
-      new SyncManager(storage, {
-        isOnline: () => navigator.onLine,
-        openMailto: (href) => {
-          window.location.href = href;
-        }
-      }),
-    []
-  );
+  const audioController = useRef<AudioPipeline>();
+  const syncManager = useMemo(() => new SyncManager(storage, {
+    isOnline: () => navigator.onLine,
+    openMailto: (href) => { window.location.href = href; }
+  }), []);
 
   useEffect(() => {
     aiClient.current = new AiWorkerClient(
@@ -76,23 +56,20 @@ export function App(): JSX.Element {
       (warning) => setWarnings((current) => [...current.slice(-2), warning])
     );
     aiClient.current.initialize();
-
+    
     registerServiceWorker(() => flushSyncQueue()).catch((error) => addWarning(error));
     const unsubscribe = subscribeToNetworkStatus((isOnline) => {
       setOnline(isOnline);
-      if (isOnline) {
-        flushSyncQueue();
-      }
+      if (isOnline) flushSyncQueue();
     });
-
+    
     refreshDocuments();
     completeDriveOAuthIfPresent();
-
+    
     return () => {
       unsubscribe();
       aiClient.current?.dispose();
     };
-    // Service worker and model startup should run once for this app shell.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
@@ -119,9 +96,7 @@ export function App(): JSX.Element {
 
   async function completeDriveOAuthIfPresent(): Promise<void> {
     const code = readAuthorizationCodeFromLocation();
-    if (!code || !driveClientId) {
-      return;
-    }
+    if (!code || !driveClientId) return;
     try {
       const token = await exchangeDriveAuthorizationCode(code, {
         clientId: driveClientId,
@@ -143,36 +118,26 @@ export function App(): JSX.Element {
   }
 
   async function startRecording(): Promise<void> {
-    transcriptBuffer.current = [];
-    audioController.current = new AudioCaptureController();
-    await audioController.current.start({
-      onAudioFrame: (samples) => {
-        transcriptBuffer.current.push(samples);
-      },
-      onLevel: (rms) => setLevel(Math.min(1, rms * 12)),
-      onError: addWarning
+    audioController.current = new AudioPipeline((text) => {
+      setRawText(text); // Pipes the live pipeline string directly to your transcript box
     });
+    
+    await audioController.current.initialize();
+    await audioController.current.startRecording();
+    
     setRecording(true);
     setState('recording-active');
   }
 
   async function stopRecording(): Promise<void> {
-    const blob = await audioController.current?.stop();
+    await audioController.current?.stopRecording();
+    
     setRecording(false);
     setLevel(0);
     setState('processing-local-polish');
-    const samples = mergeAudioFrames(transcriptBuffer.current);
-    const transcript = samples.length
-      ? await aiClient.current?.transcribe(samples, sourceLang).then((segment) => segment.text)
-      : '';
-    const nextRaw = [rawText, transcript].filter(Boolean).join(rawText && transcript ? '\n' : '');
-    setRawText(nextRaw);
-    const audioUrl = blob ? URL.createObjectURL(blob) : undefined;
-    if (audioUrl) {
-      const audioSizeKb = Math.round((blob?.size ?? 0) / 1024);
-      setWarnings((current) => [...current.slice(-2), `Audio captured locally: ${audioSizeKb} KB`]);
-    }
-    await runPolish(nextRaw);
+    setWarnings((current) => [...current.slice(-2), `Audio captured locally.`]);
+    
+    await runPolish(rawText);
   }
 
   async function runPolish(text = rawText): Promise<void> {
@@ -190,10 +155,10 @@ export function App(): JSX.Element {
   }
 
   async function saveCurrentDocument(): Promise<void> {
-    const destination: SyncDestination =
-      destinationType === 'email'
-        ? { type: 'email', path_or_recipient: recipient }
-        : { type: 'gdrive', path_or_recipient: driveFolder, accessToken: driveAccessToken || undefined };
+    const destination: SyncDestination = destinationType === 'email' 
+      ? { type: 'email', path_or_recipient: recipient } 
+      : { type: 'gdrive', path_or_recipient: driveFolder, accessToken: driveAccessToken || undefined };
+      
     const title = buildTitle(polishedText || rawText);
     const document = await storage.saveDocument({
       raw_transcript: rawText,
@@ -204,12 +169,11 @@ export function App(): JSX.Element {
       sync_destination: destination,
       title
     });
+    
     setSelectedId(document.id);
     setState('sync-pending');
     await refreshDocuments();
-    if (online) {
-      await flushSyncQueue();
-    }
+    if (online) await flushSyncQueue();
   }
 
   async function flushSyncQueue(): Promise<void> {
@@ -258,36 +222,33 @@ export function App(): JSX.Element {
             <p>Local-first dictation desk</p>
           </div>
         </div>
+        
         <div className={`network-badge ${online ? 'online' : 'offline'}`}>
           {online ? <Cloud size={16} /> : <CloudOff size={16} />}
           {online ? 'Online' : 'Offline'}
         </div>
+        
         <section className="metric-grid" aria-label="Local cache metrics">
           <Metric label="Documents" value={metrics.documents} />
           <Metric label="Pending" value={metrics.pending} />
           <Metric label="Synced" value={metrics.synced} />
           <Metric label="Failed" value={metrics.failed} />
         </section>
+        
         <section className="history-list" aria-label="Document history">
           <div className="section-title">
-            <FileText size={16} />
-            History
+            <FileText size={16} /> History
           </div>
           {documents.length === 0 ? <p className="empty">No local documents yet.</p> : null}
           {documents.map((document) => (
-            <button
-              className={`history-item ${selectedId === document.id ? 'selected' : ''}`}
-              key={document.id}
-              type="button"
-              onClick={() => selectDocument(document)}
-            >
+            <button className={`history-item ${selectedId === document.id ? 'selected' : ''}`} key={document.id} type="button" onClick={() => selectDocument(document)}>
               <span>{document.title}</span>
               <small>{document.sync_status}</small>
             </button>
           ))}
         </section>
       </aside>
-
+      
       <section className="stage" aria-label="Transcription workspace">
         <header className="stage-header">
           <div>
@@ -295,11 +256,10 @@ export function App(): JSX.Element {
             <h2>{formatState(state)}</h2>
           </div>
           <div className="runtime-status">
-            <Activity size={18} />
-            16 kHz mono capture · WASM/WebGPU worker
+            <Activity size={18} /> 16 kHz mono capture · WASM/WebGPU worker
           </div>
         </header>
-
+        
         <div className="meter-panel">
           <div className="record-core">
             <button className={`record-button ${recording ? 'active' : ''}`} type="button" onClick={toggleRecording}>
@@ -314,7 +274,7 @@ export function App(): JSX.Element {
             <span style={{ width: `${Math.max(3, level * 100)}%` }} />
           </div>
         </div>
-
+        
         <div className="editor-grid">
           <label className="editor-panel">
             <span>Raw transcript</span>
@@ -325,12 +285,11 @@ export function App(): JSX.Element {
             <textarea value={polishedText} onChange={(event) => setPolishedText(event.target.value)} />
           </label>
         </div>
-
         <label className="translation-panel">
           <span>Translation output</span>
           <textarea value={translatedText} onChange={(event) => setTranslatedText(event.target.value)} />
         </label>
-
+        
         {warnings.length ? (
           <div className="warning-stack" role="status">
             {warnings.map((warning) => (
@@ -339,43 +298,39 @@ export function App(): JSX.Element {
           </div>
         ) : null}
       </section>
-
+      
       <aside className="action-panel" aria-label="Actions and sync settings">
         <PanelHeader icon={<Sparkles size={18} />} title="Local actions" />
         <div className="button-row">
           <button type="button" onClick={() => runPolish()}>
-            <Sparkles size={16} />
-            Polish
+            <Sparkles size={16} /> Polish
           </button>
           <button type="button" onClick={() => runTranslate()}>
-            <Languages size={16} />
-            Translate
+            <Languages size={16} /> Translate
           </button>
         </div>
-
+        
         <PanelHeader icon={<SlidersHorizontal size={18} />} title="Polishing constraints" />
         <Slider label="Concise" value={polishOptions.concise} onChange={(concise) => setPolishOptions({ ...polishOptions, concise })} />
         <Slider label="Structure" value={polishOptions.structure} onChange={(structure) => setPolishOptions({ ...polishOptions, structure })} />
         <Slider label="Tone" value={polishOptions.tone} onChange={(tone) => setPolishOptions({ ...polishOptions, tone })} />
-
+        
         <PanelHeader icon={<Languages size={18} />} title="Languages" />
         <div className="field-row">
           <Select label="Source" value={sourceLang} onChange={setSourceLang} />
           <Select label="Target" value={targetLang} onChange={setTargetLang} />
         </div>
-
+        
         <PanelHeader icon={destinationType === 'email' ? <Mail size={18} /> : <FolderUp size={18} />} title="Sync destination" />
         <div className="segmented">
           <button className={destinationType === 'email' ? 'selected' : ''} type="button" onClick={() => setDestinationType('email')}>
-            <Mail size={15} />
-            Email
+            <Mail size={15} /> Email
           </button>
           <button className={destinationType === 'gdrive' ? 'selected' : ''} type="button" onClick={() => setDestinationType('gdrive')}>
-            <FolderUp size={15} />
-            Drive
+            <FolderUp size={15} /> Drive
           </button>
         </div>
-
+        
         {destinationType === 'email' ? (
           <label className="field">
             Recipient
@@ -396,20 +351,17 @@ export function App(): JSX.Element {
               <input value={driveAccessToken} onChange={(event) => setDriveAccessToken(event.target.value)} />
             </label>
             <button type="button" onClick={authorizeDrive}>
-              <Play size={16} />
-              Authorize
+              <Play size={16} /> Authorize
             </button>
           </div>
         )}
-
+        
         <div className="button-column">
           <button className="primary-action" type="button" onClick={saveCurrentDocument}>
-            <Save size={16} />
-            Save to queue
+            <Save size={16} /> Save to queue
           </button>
           <button type="button" onClick={flushSyncQueue}>
-            <Send size={16} />
-            Flush queue
+            <Send size={16} /> Flush queue
           </button>
         </div>
       </aside>
@@ -438,10 +390,7 @@ function PanelHeader({ icon, title }: { icon: JSX.Element; title: string }): JSX
 function Slider({ label, value, onChange }: { label: string; value: number; onChange: (value: number) => void }): JSX.Element {
   return (
     <label className="slider">
-      <span>
-        {label}
-        <strong>{value}</strong>
-      </span>
+      <span>{label} <strong>{value}</strong></span>
       <input type="range" min="0" max="100" value={value} onChange={(event) => onChange(Number(event.target.value))} />
     </label>
   );
@@ -453,24 +402,11 @@ function Select({ label, value, onChange }: { label: string; value: string; onCh
       {label}
       <select value={value} onChange={(event) => onChange(event.target.value)}>
         {languageOptions.map(([code, name]) => (
-          <option key={code} value={code}>
-            {name}
-          </option>
+          <option key={code} value={code}>{name}</option>
         ))}
       </select>
     </label>
   );
-}
-
-function mergeAudioFrames(frames: Float32Array[]): Float32Array {
-  const length = frames.reduce((total, frame) => total + frame.length, 0);
-  const merged = new Float32Array(length);
-  let offset = 0;
-  for (const frame of frames) {
-    merged.set(frame, offset);
-    offset += frame.length;
-  }
-  return merged;
 }
 
 function buildTitle(text: string): string {
@@ -479,8 +415,5 @@ function buildTitle(text: string): string {
 }
 
 function formatState(state: ModelState): string {
-  return state
-    .split('-')
-    .map((part) => `${part[0].toUpperCase()}${part.slice(1)}`)
-    .join(' ');
+  return state.split('-').map((part) => `${part[0].toUpperCase()}${part.slice(1)}`).join(' ');
 }
