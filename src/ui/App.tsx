@@ -118,26 +118,36 @@ export function App(): JSX.Element {
   }
 
   async function startRecording(): Promise<void> {
-    audioController.current = new AudioPipeline((text) => {
-      setRawText(text); // Pipes the live pipeline string directly to your transcript box
-    });
-    
-    await audioController.current.initialize();
-    await audioController.current.startRecording();
-    
-    setRecording(true);
-    setState('recording-active');
+    try {
+      audioController.current = new AudioPipeline((text) => {
+        setRawText(text); // Pipes the live pipeline string directly to your transcript box
+      });
+      
+      await audioController.current.initialize();
+      await audioController.current.startRecording();
+      
+      setRecording(true);
+      setState('recording-active');
+    } catch (error) {
+      // If the worklet 404s or the mic is blocked, this will print the exact reason to the screen
+      addWarning(`Microphone Error: ${error instanceof Error ? error.message : String(error)}`);
+      setState('system-ready');
+    }
   }
 
   async function stopRecording(): Promise<void> {
-    await audioController.current?.stopRecording();
-    
-    setRecording(false);
-    setLevel(0);
-    setState('processing-local-polish');
-    setWarnings((current) => [...current.slice(-2), `Audio captured locally.`]);
-    
-    await runPolish(rawText);
+    try {
+      await audioController.current?.stopRecording();
+      
+      setRecording(false);
+      setLevel(0);
+      setState('processing-local-polish');
+      setWarnings((current) => [...current.slice(-2), `Audio captured locally.`]);
+      
+      await runPolish(rawText);
+    } catch (error) {
+      addWarning(`Stop Recording Error: ${error instanceof Error ? error.message : String(error)}`);
+    }
   }
 
   async function runPolish(text = rawText): Promise<void> {
