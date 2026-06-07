@@ -14,9 +14,10 @@
     "lint": "eslint ."
   },
   "dependencies": {
+    "@huggingface/transformers": "^4.2.0",
+    "@litertjs/core": "^2.5.2",
     "@mlc-ai/web-llm": "^0.2.79",
     "@vitejs/plugin-react": "^5.0.0",
-    "@huggingface/transformers": "^4.2.0",
     "idb": "^8.0.3",
     "lucide-react": "^0.468.0",
     "react": "^18.3.1",

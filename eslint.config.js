@@ -28,17 +28,20 @@ export default tseslint.config(
     }
   },
   {
-    files: ['public/**/*.js'],
+    files: ['public/**/*.js', 'sw.js'],
     languageOptions: {
       ecmaVersion: 2022,
       globals: {
         AudioWorkletProcessor: 'readonly',
+        Headers: 'readonly',
+        Request: 'readonly',
+        Response: 'readonly',
+        URL: 'readonly',
         caches: 'readonly',
         fetch: 'readonly',
         registerProcessor: 'readonly',
         sampleRate: 'readonly',
-        self: 'readonly',
-        URL: 'readonly'
+        self: 'readonly'
       }
     }
   }

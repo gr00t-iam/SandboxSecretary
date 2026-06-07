@@ -8,3 +8,9 @@ air-gapped build. The default runtime configuration uses:
 
 When these folders are not bundled, the app can download them once while online
 and the service worker/browser cache will retain the artifacts for offline use.
+
+For Google Gemma-family WebGPU deployments, use Google's LiteRT.js runtime
+(`@litertjs/core`) with converted `.tflite` model assets. Put converted Gemma
+model files under `/models/<model-name>/` and serve the LiteRT.js Wasm runtime
+files from `/litert/wasm/`; `public/sw.js` separates those large model/runtime
+requests into the model cache so the app shell can still load in airplane mode.

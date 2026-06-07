@@ -121,7 +121,7 @@ export function App(): JSX.Element {
     try {
       audioController.current = new AudioPipeline((text) => {
         setRawText(text); // Pipes the live pipeline string directly to your transcript box
-      });
+      }, setLevel);
       
       await audioController.current.initialize();
       await audioController.current.startRecording();
