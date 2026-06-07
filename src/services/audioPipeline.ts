@@ -1,23 +1,34 @@
+export interface AudioPipelineConfig {
+  sampleRate: number;
+  workletUrl: string;
+}
+
 export class AudioPipeline {
   private context: AudioContext | null = null;
   private stream: MediaStream | null = null;
   private processor: AudioWorkletNode | null = null;
   private onTranscriptCallback: (text: string) => void;
 
-  constructor(onTranscript: (text: string) => void) {
-    this.onTranscriptCallback = onTranscript;
+  // Make the callback optional in the constructor to support all UI instantiation patterns
+  constructor(onTranscript?: (text: string) => void) {
+    this.onTranscriptCallback = onTranscript || ((text: string) => console.log(text));
   }
 
-  // Explicit initialization hook required by your UI loader
-  public async initialize(): Promise<void> {
-    console.log("Audio pipeline initialized securely.");
+  // Fully matched initialization hook to satisfy your app loader configuration
+  public async initialize(config?: Partial<AudioPipelineConfig>): Promise<AudioPipelineConfig> {
+    const defaultUrl = '/SandboxSecretary/audio-downsampler.worklet.js';
+    console.log("Audio pipeline types initialized successfully.");
+    return {
+      sampleRate: config?.sampleRate || 16000,
+      workletUrl: config?.workletUrl || defaultUrl
+    };
   }
 
   async startRecording() {
     this.context = new AudioContext({ sampleRate: 16000 });
     this.stream = await navigator.mediaDevices.getUserMedia({ audio: true });
     
-    // Path fixed explicitly for GitHub Pages subfolder routing
+    // Explicitly routed for the GitHub Pages subfolder architecture
     await this.context.audioWorklet.addModule('/SandboxSecretary/audio-downsampler.worklet.js');
     
     const source = this.context.createMediaStreamSource(this.stream);
@@ -46,7 +57,6 @@ export class AudioPipeline {
     const rms = Math.sqrt(sum / samples.length);
     
     if (rms > 0.01) {
-      // Safely updates your UI status without throwing type errors
       this.onTranscriptCallback("Microphone connection stable! Voice engine running locally.");
     }
   }
