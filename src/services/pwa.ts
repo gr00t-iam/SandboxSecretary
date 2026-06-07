@@ -2,28 +2,32 @@ export async function registerServiceWorker(onFlushSync: () => void): Promise<vo
   if (!('serviceWorker' in navigator)) {
     return;
   }
-  
-  if (import.meta.env.DEV) {
-    const registrations = await navigator.serviceWorker.getRegistrations();
-    await Promise.all(registrations.map((registration) => registration.unregister()));
-    return;
-  }
-  
-  // Updated path to point to your subfolder, and updated scope
-  const registration = await navigator.serviceWorker.register('/SandboxSecretary/sw.js', { 
-    scope: '/SandboxSecretary/' 
-  });
-  
-  navigator.serviceWorker.addEventListener('message', (event) => {
-    if (event.data?.type === 'FLUSH_SYNC_QUEUE') {
-      onFlushSync();
+
+  // FORCE unregister all existing service workers. 
+  // This cleans up any previous registrations (even from the root domain)
+  // so the new, correctly scoped registration can take over.
+  const registrations = await navigator.serviceWorker.getRegistrations();
+  await Promise.all(registrations.map((registration) => registration.unregister()));
+
+  try {
+    // Register the new worker with the correct subfolder path and scope
+    const registration = await navigator.serviceWorker.register('/SandboxSecretary/sw.js', { 
+      scope: '/SandboxSecretary/' 
+    });
+
+    navigator.serviceWorker.addEventListener('message', (event) => {
+      if (event.data?.type === 'FLUSH_SYNC_QUEUE') {
+        onFlushSync();
+      }
+    });
+
+    if ('sync' in registration) {
+      await (registration as ServiceWorkerRegistration & { sync: { register: (tag: string) => Promise<void> } }).sync
+        .register('sandbox-secretary-flush')
+        .catch(() => undefined);
     }
-  });
-  
-  if ('sync' in registration) {
-    await (registration as ServiceWorkerRegistration & { sync: { register: (tag: string) => Promise<void> } }).sync
-      .register('sandbox-secretary-flush')
-      .catch(() => undefined);
+  } catch (error) {
+    console.warn("Service Worker registration failed:", error);
   }
 }
 
