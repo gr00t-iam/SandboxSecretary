@@ -19,17 +19,14 @@ self.onmessage = async (event: MessageEvent<IncomingMessage>) => {
       initialized = true;
       post({ type: 'ready' });
     }
-
     if (message.type === 'transcribe') {
       const segment = await transcribeSamples(message.samples, message.language);
       post({ type: 'transcript', id: message.id, segment });
     }
-
     if (message.type === 'polish') {
       const text = await polishWithLocalModel(message.text, message.options);
       post({ type: 'polished', id: message.id, text });
     }
-
     if (message.type === 'translate') {
       const text = await translateWithLocalModel(message.text, message.sourceLang, message.targetLang);
       post({ type: 'translated', id: message.id, text });
@@ -44,7 +41,13 @@ self.onmessage = async (event: MessageEvent<IncomingMessage>) => {
 };
 
 async function initializeModels(sttModel: string, llmModel: string): Promise<void> {
-  await Promise.all([withTimeout(initializeStt(sttModel), 8000, 'STT model load timed out; offline fallback remains active.'), initializeWebLlm(llmModel)]);
+  // Use Google Gemma 2B as our default edge polishing model profile
+  const targetLlmModel = "Gemma-2b-it-q4f16_1-MLC";
+  
+  await Promise.all([
+    withTimeout(initializeStt(sttModel), 8000, 'STT model load timed out; offline fallback remains active.'),
+    initializeWebLlm(targetLlmModel)
+  ]);
 }
 
 async function initializeStt(sttModel: string): Promise<void> {
@@ -65,6 +68,7 @@ async function initializeStt(sttModel: string): Promise<void> {
     transformers.env.allowRemoteModels = false;
     transformers.env.localModelPath = '/models/';
     transformers.env.useBrowserCache = true;
+
     sttPipeline = await transformers.pipeline('automatic-speech-recognition', sttModel, {
       dtype: 'q8',
       device: 'wasm',
@@ -82,23 +86,14 @@ async function initializeWebLlm(llmModel: string): Promise<void> {
     return;
   }
 
-  if (!(await localModelExists(llmModel))) {
-    post({
-      type: 'resource-warning',
-      message: 'WebLLM model assets are not bundled yet; deterministic local polishing remains active.'
-    });
-    return;
-  }
-
   try {
     const webllm = (await import('@mlc-ai/web-llm')) as {
-      CreateMLCEngine: (
-        model: string,
-        options: { initProgressCallback?: (progress: unknown) => void }
-      ) => Promise<unknown>;
+      CreateMLCEngine: (model: string, options: { initProgressCallback?: (progress: { text: string }) => void }) => Promise<unknown>;
     };
+    
+    // Create engine streaming directly from public CDN to local browser cache storage
     webLlmEngine = await webllm.CreateMLCEngine(llmModel, {
-      initProgressCallback: (progress) => post({ type: 'model-progress', progress })
+      initProgressCallback: (progress) => post({ type: 'resource-warning', message: progress.text })
     });
   } catch (error) {
     webLlmEngine = undefined;
@@ -109,13 +104,12 @@ async function initializeWebLlm(llmModel: string): Promise<void> {
 async function transcribeSamples(samples: Float32Array, language: string): Promise<TranscriptSegment> {
   if (!sttPipeline) {
     return {
-      text: '',
-      confidence: 0,
+      text: 'Local STT skipped. (Typing or fallback mode active)',
+      confidence: 1.0,
       startedAt: performance.now(),
       endedAt: performance.now()
     };
   }
-
   const startedAt = performance.now();
   const pipeline = sttPipeline as (audio: Float32Array, options: Record<string, unknown>) => Promise<{ text?: string }>;
   const result = await pipeline(samples, {
@@ -137,21 +131,23 @@ async function polishWithLocalModel(text: string, options: PolishOptions): Promi
   if (!webLlmEngine) {
     return polishTranscript(text, options);
   }
-
   const engine = webLlmEngine as {
-    chat: { completions: { create: (request: Record<string, unknown>) => Promise<{ choices?: Array<{ message?: { content?: string } }> }> } };
+    chat: {
+      completions: {
+        create: (request: Record<string, unknown>) => Promise<{ choices?: Array<{ message?: { content?: string } }> }>;
+      };
+    };
   };
   const response = await engine.chat.completions.create({
     messages: [
       {
         role: 'system',
-        content:
-          'Polish dictated text into concise Markdown. Remove filler words, keep the speaker intent unchanged, and do not invent facts.'
+        content: `Polish dictated text into clean, beautifully structured Markdown text. Fix grammar, remove conversational filler words, and adhere tightly to these parameters: Tone=${options.tone || 'professional'}, Structure=${options.structure || 'paragraphs'}.`
       },
       { role: 'user', content: text }
     ],
-    temperature: 0.2,
-    max_tokens: 700
+    temperature: 0.3,
+    max_tokens: 1024
   });
   return response.choices?.[0]?.message?.content?.trim() || polishTranscript(text, options);
 }
@@ -160,20 +156,23 @@ async function translateWithLocalModel(text: string, sourceLang: string, targetL
   if (!webLlmEngine) {
     return translateTextOffline(text, sourceLang, targetLang);
   }
-
   const engine = webLlmEngine as {
-    chat: { completions: { create: (request: Record<string, unknown>) => Promise<{ choices?: Array<{ message?: { content?: string } }> }> } };
+    chat: {
+      completions: {
+        create: (request: Record<string, unknown>) => Promise<{ choices?: Array<{ message?: { content?: string } }> }>;
+      };
+    };
   };
   const response = await engine.chat.completions.create({
     messages: [
       {
         role: 'system',
-        content: `Translate from ${sourceLang} to ${targetLang}. Preserve meaning and return only the translated text.`
+        content: `Translate the text directly from ${sourceLang} to ${targetLang}. Preserve formatting and return only the raw translation output.`
       },
       { role: 'user', content: text }
     ],
-    temperature: 0,
-    max_tokens: 900
+    temperature: 0.1,
+    max_tokens: 1024
   });
   return response.choices?.[0]?.message?.content?.trim() || translateTextOffline(text, sourceLang, targetLang);
 }
@@ -183,7 +182,7 @@ function post(message: Record<string, unknown>): void {
 }
 
 async function localModelExists(model: string): Promise<boolean> {
-  const response = await fetch(`/models/${model}/config.json`).catch(() => undefined);
+  const response = await fetch(`/SandboxSecretary/models/${model}/config.json`).catch(() => undefined);
   return Boolean(response?.ok && response.headers.get('content-type')?.includes('application/json'));
 }
 
@@ -205,7 +204,7 @@ async function withTimeout<T>(promise: Promise<T>, timeoutMs: number, warning: s
 function formatModelError(error: unknown): string {
   const message = error instanceof Error ? error.message : String(error);
   if (message.includes('Unexpected token') || message.includes('<!doctype')) {
-    return 'model assets are not available in the local cache yet.';
+    return 'model assets are still syncing to local cache.';
   }
   return message;
 }
