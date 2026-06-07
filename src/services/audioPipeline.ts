@@ -29,7 +29,7 @@ export class AudioCaptureController {
 
       const AudioContextConstructor = window.AudioContext || window.webkitAudioContext;
       this.context = new AudioContextConstructor();
-      await this.context.audioWorklet.addModule('/audio-downsampler.worklet.js');
+      await this.context.audioWorklet.addModule('/SandboxSecretary/audio-downsampler.worklet.js');
       this.source = this.context.createMediaStreamSource(this.stream);
       this.workletNode = new AudioWorkletNode(this.context, 'downsample-processor');
       this.workletNode.port.onmessage = (event: MessageEvent) => {
