@@ -12,7 +12,7 @@ class DownsampleProcessor extends AudioWorkletProcessor {
     if (!input || input.length === 0) {
       return true;
     }
-
+    
     let sumSquares = 0;
     for (let index = 0; index < input.length; index += 1) {
       sumSquares += input[index] * input[index];
@@ -31,23 +31,25 @@ class DownsampleProcessor extends AudioWorkletProcessor {
         }
         downsampled[index] = total / (end - start);
       }
-
+      
       const consumed = Math.floor(outputLength * this.ratio);
       this.carry = this.carry.slice(consumed);
+      
       this.port.postMessage(
-        {
-          type: 'audio-frame',
-          samples: downsampled,
-          rms: Math.sqrt(sumSquares / input.length)
-        },
+        { 
+          type: 'audio-frame', 
+          samples: downsampled, 
+          rms: Math.sqrt(sumSquares / input.length) 
+        }, 
         [downsampled.buffer]
       );
     } else {
       this.port.postMessage({ type: 'level', rms: Math.sqrt(sumSquares / input.length) });
     }
-
+    
     return true;
   }
 }
 
-registerProcessor('downsample-processor', DownsampleProcessor);
+// Updated this name to match your AudioPipeline look-up
+registerProcessor('audio-downsampler-processor', DownsampleProcessor);
