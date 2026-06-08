@@ -44,4 +44,32 @@ describe('SyncManager', () => {
     const metrics = await storage.getMetrics();
     expect(metrics.failed).toBe(1);
   });
+
+  it('uses saved Drive credentials when a queued document only has the folder destination', async () => {
+    const storage = new SecretaryStorage(`sandbox-secretary-sync-test-${crypto.randomUUID()}`);
+    await storage.saveDocument({
+      raw_transcript: 'raw',
+      polished_text: 'draft',
+      source_lang: 'en',
+      target_lang: 'en',
+      sync_status: 'pending',
+      sync_destination: { type: 'gdrive', path_or_recipient: 'folder-id' },
+      title: 'Drive note'
+    });
+    const fetchImpl = vi.fn(async () => new Response('{}', { status: 200 }));
+    const sync = new SyncManager(storage, {
+      isOnline: () => true,
+      openMailto: vi.fn(),
+      getDriveCredentials: async () => ({ folderId: 'folder-id', clientId: 'client-id', accessToken: 'saved-token' }),
+      fetch: fetchImpl as unknown as typeof fetch
+    });
+
+    const result = await sync.flushPending();
+
+    expect(result.synced).toBe(1);
+    const [, requestInit] = fetchImpl.mock.calls[0] as unknown as [string, RequestInit];
+    expect(requestInit.headers).toMatchObject({
+      Authorization: 'Bearer saved-token'
+    });
+  });
 });

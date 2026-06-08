@@ -1,4 +1,4 @@
-const VERSION = 'v5';
+const VERSION = 'v6';
 const STATIC_CACHE = `sandbox-secretary-static-${VERSION}`;
 const RUNTIME_CACHE = `sandbox-secretary-runtime-${VERSION}`;
 const MODEL_CACHE = `sandbox-secretary-models-${VERSION}`;

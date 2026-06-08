@@ -1,9 +1,11 @@
 import type { SecretaryDocument } from '../types';
+import type { DriveCredentials } from './defaultConfig';
 import type { SecretaryStorage } from './storage';
 
 interface SyncDependencies {
   isOnline: () => boolean;
   openMailto: (href: string) => void;
+  getDriveCredentials?: () => Promise<DriveCredentials | undefined>;
   fetch?: typeof fetch;
 }
 
@@ -52,7 +54,7 @@ export class SyncManager {
       return;
     }
 
-    await uploadToDrive(document, this.fetchImpl);
+    await uploadToDrive(document, this.fetchImpl, this.dependencies.getDriveCredentials);
   }
 }
 
@@ -63,20 +65,31 @@ export function buildMailtoHref(document: SecretaryDocument): string {
   return `mailto:${recipient}?subject=${subject}&body=${body}`;
 }
 
-async function uploadToDrive(document: SecretaryDocument, fetchImpl: typeof fetch): Promise<void> {
+async function uploadToDrive(
+  document: SecretaryDocument,
+  fetchImpl: typeof fetch,
+  getDriveCredentials?: () => Promise<DriveCredentials | undefined>
+): Promise<void> {
   const { sync_destination } = document;
   if (sync_destination.type !== 'gdrive') {
     return;
   }
 
-  if (!sync_destination.accessToken) {
+  const savedCredentials = await getDriveCredentials?.();
+  const accessToken = sync_destination.accessToken || savedCredentials?.accessToken;
+  const folderId = sync_destination.path_or_recipient || savedCredentials?.folderId;
+
+  if (!accessToken) {
     throw new Error('Google Drive OAuth token is required for browser-native upload.');
+  }
+  if (!folderId) {
+    throw new Error('Google Drive folder ID is required for browser-native upload.');
   }
 
   const metadata = {
     name: `${document.title || document.id}.md`,
     mimeType: 'text/markdown',
-    parents: [sync_destination.path_or_recipient]
+    parents: [folderId]
   };
   const boundary = `sandbox-secretary-${document.id}`;
   const body = [
@@ -94,7 +107,7 @@ async function uploadToDrive(document: SecretaryDocument, fetchImpl: typeof fetc
   const response = await fetchImpl('https://www.googleapis.com/upload/drive/v3/files?uploadType=multipart', {
     method: 'POST',
     headers: {
-      Authorization: `Bearer ${sync_destination.accessToken}`,
+      Authorization: `Bearer ${accessToken}`,
       'Content-Type': `multipart/related; boundary=${boundary}`
     },
     body

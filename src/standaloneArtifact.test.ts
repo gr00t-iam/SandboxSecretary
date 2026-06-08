@@ -65,6 +65,12 @@ describe('standalone Sandbox Secretary artifact', () => {
       'saveDriveCredentials',
       'loadDriveCredentials',
       'resetCredentials',
+      'authorizeDrive',
+      'createDriveAuthorizationUrl',
+      'exchangeDriveAuthorizationCode',
+      'technician.there@gmail.com',
+      '1cfq17rEgFDMehIUd7xDb6ctittwzrkVA',
+      '806567057060-152daedbqsjtemq6qa1r3tsq6dpfgj2i.apps.googleusercontent.com',
       'Credentials Saved',
       'Authorize',
       'Reset Credentials'

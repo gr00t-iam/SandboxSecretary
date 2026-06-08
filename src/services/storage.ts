@@ -1,6 +1,12 @@
 import { openDB, type DBSchema, type IDBPDatabase } from 'idb';
 import type { CacheMetrics, SecretaryDocument } from '../types';
 
+interface ConfigRecord<T = unknown> {
+  key: string;
+  value: T;
+  updated_at: string;
+}
+
 interface SecretarySchema extends DBSchema {
   documents: {
     key: string;
@@ -9,6 +15,10 @@ interface SecretarySchema extends DBSchema {
       'by-timestamp': string;
       'by-sync-status': string;
     };
+  };
+  config: {
+    key: string;
+    value: ConfigRecord;
   };
 }
 
@@ -19,11 +29,16 @@ export class SecretaryStorage {
   private readonly dbPromise: Promise<IDBPDatabase<SecretarySchema>>;
 
   constructor(databaseName = 'sandbox-secretary') {
-    this.dbPromise = openDB<SecretarySchema>(databaseName, 1, {
+    this.dbPromise = openDB<SecretarySchema>(databaseName, 2, {
       upgrade(database) {
-        const store = database.createObjectStore('documents', { keyPath: 'id' });
-        store.createIndex('by-timestamp', 'timestamp');
-        store.createIndex('by-sync-status', 'sync_status');
+        if (!database.objectStoreNames.contains('documents')) {
+          const store = database.createObjectStore('documents', { keyPath: 'id' });
+          store.createIndex('by-timestamp', 'timestamp');
+          store.createIndex('by-sync-status', 'sync_status');
+        }
+        if (!database.objectStoreNames.contains('config')) {
+          database.createObjectStore('config', { keyPath: 'key' });
+        }
       }
     });
   }
@@ -81,5 +96,21 @@ export class SecretaryStorage {
       },
       { documents: 0, pending: 0, failed: 0, synced: 0 }
     );
+  }
+
+  async putConfig<T>(key: string, value: T): Promise<void> {
+    const db = await this.dbPromise;
+    await db.put('config', { key, value, updated_at: new Date().toISOString() });
+  }
+
+  async getConfig<T>(key: string): Promise<T | undefined> {
+    const db = await this.dbPromise;
+    const record = await db.get('config', key);
+    return record?.value as T | undefined;
+  }
+
+  async deleteConfig(key: string): Promise<void> {
+    const db = await this.dbPromise;
+    await db.delete('config', key);
   }
 }

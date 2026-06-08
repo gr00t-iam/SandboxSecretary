@@ -44,4 +44,22 @@ describe('SecretaryStorage', () => {
     const pending = await storage.listPendingDocuments();
     expect(pending.map((doc) => doc.id)).toEqual([earlier.id, later.id]);
   });
+
+  it('stores local app configuration separately from documents', async () => {
+    const storage = new SecretaryStorage(`sandbox-secretary-test-${crypto.randomUUID()}`);
+    await storage.putConfig('driveCredentials', {
+      folderId: 'folder-id',
+      clientId: 'client-id',
+      accessToken: 'token'
+    });
+
+    await expect(storage.getConfig('driveCredentials')).resolves.toMatchObject({
+      folderId: 'folder-id',
+      clientId: 'client-id',
+      accessToken: 'token'
+    });
+
+    await storage.deleteConfig('driveCredentials');
+    await expect(storage.getConfig('driveCredentials')).resolves.toBeUndefined();
+  });
 });

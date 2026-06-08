@@ -5,6 +5,13 @@ import { AiWorkerClient } from '../services/aiWorkerClient';
 import { AudioPipeline } from '../services/audioPipeline';
 import { createDriveAuthorizationUrl, exchangeDriveAuthorizationCode, readAuthorizationCodeFromLocation } from '../services/oauth';
 import { registerServiceWorker, subscribeToNetworkStatus } from '../services/pwa';
+import {
+  DEFAULT_DRIVE_CLIENT_ID,
+  DEFAULT_DRIVE_FOLDER_ID,
+  DEFAULT_EMAIL_RECIPIENT,
+  type DriveCredentials,
+  withDefaultDriveCredentials
+} from '../services/defaultConfig';
 import { SecretaryStorage } from '../services/storage';
 import { SyncManager } from '../services/sync';
 import { polishTranscript, translateTextOffline } from '../services/textProcessing';
@@ -33,9 +40,9 @@ export function App(): JSX.Element {
   const [sourceLang, setSourceLang] = useState('en');
   const [targetLang, setTargetLang] = useState('es');
   const [destinationType, setDestinationType] = useState<SyncDestination['type']>('email');
-  const [recipient, setRecipient] = useState('me@example.com');
-  const [driveFolder, setDriveFolder] = useState('');
-  const [driveClientId, setDriveClientId] = useState('');
+  const [recipient, setRecipient] = useState(DEFAULT_EMAIL_RECIPIENT);
+  const [driveFolder, setDriveFolder] = useState(DEFAULT_DRIVE_FOLDER_ID);
+  const [driveClientId, setDriveClientId] = useState(DEFAULT_DRIVE_CLIENT_ID);
   const [driveAccessToken, setDriveAccessToken] = useState('');
   const [polishOptions, setPolishOptions] = useState<PolishOptions>({ concise: 55, structure: 80, tone: 45 });
   
@@ -47,7 +54,8 @@ export function App(): JSX.Element {
   const audioController = useRef<AudioPipeline>();
   const syncManager = useMemo(() => new SyncManager(storage, {
     isOnline: () => navigator.onLine,
-    openMailto: (href) => { window.location.href = href; }
+    openMailto: (href) => { window.location.href = href; },
+    getDriveCredentials: async () => storage.getConfig<DriveCredentials>('driveCredentials')
   }), []);
 
   useEffect(() => {
@@ -64,7 +72,7 @@ export function App(): JSX.Element {
     });
     
     refreshDocuments();
-    completeDriveOAuthIfPresent();
+    loadExportConfiguration().catch((error) => addWarning(error));
     
     return () => {
       unsubscribe();
@@ -94,16 +102,29 @@ export function App(): JSX.Element {
     setMetrics(nextMetrics);
   }
 
-  async function completeDriveOAuthIfPresent(): Promise<void> {
+  async function loadExportConfiguration(): Promise<void> {
+    const saved = withDefaultDriveCredentials(await storage.getConfig<DriveCredentials>('driveCredentials'));
+    setDriveFolder(saved.folderId);
+    setDriveClientId(saved.clientId);
+    setDriveAccessToken(saved.accessToken ?? '');
+    setRecipient((current) => current.trim() || DEFAULT_EMAIL_RECIPIENT);
+
+    await completeDriveOAuthIfPresent(saved);
+  }
+
+  async function completeDriveOAuthIfPresent(credentials: DriveCredentials): Promise<void> {
     const code = readAuthorizationCodeFromLocation();
-    if (!code || !driveClientId) return;
+    if (!code || !credentials.clientId) return;
     try {
       const token = await exchangeDriveAuthorizationCode(code, {
-        clientId: driveClientId,
+        clientId: credentials.clientId,
         redirectUri: window.location.origin + window.location.pathname
       });
+      const nextCredentials = { ...credentials, accessToken: token };
+      await storage.putConfig('driveCredentials', nextCredentials);
       setDriveAccessToken(token);
       window.history.replaceState({}, document.title, window.location.pathname);
+      setWarnings((current) => [...current.slice(-2), 'Google Drive authorization saved locally.']);
     } catch (error) {
       addWarning(error);
     }
@@ -165,9 +186,14 @@ export function App(): JSX.Element {
   }
 
   async function saveCurrentDocument(): Promise<void> {
+    const effectiveDrive = withDefaultDriveCredentials({
+      folderId: driveFolder,
+      clientId: driveClientId,
+      accessToken: driveAccessToken
+    });
     const destination: SyncDestination = destinationType === 'email' 
-      ? { type: 'email', path_or_recipient: recipient } 
-      : { type: 'gdrive', path_or_recipient: driveFolder, accessToken: driveAccessToken || undefined };
+      ? { type: 'email', path_or_recipient: recipient.trim() || DEFAULT_EMAIL_RECIPIENT } 
+      : { type: 'gdrive', path_or_recipient: effectiveDrive.folderId, accessToken: effectiveDrive.accessToken };
       
     const title = buildTitle(polishedText || rawText);
     const document = await storage.saveDocument({
@@ -196,12 +222,20 @@ export function App(): JSX.Element {
   }
 
   async function authorizeDrive(): Promise<void> {
-    if (!driveClientId.trim()) {
+    const credentials = withDefaultDriveCredentials({
+      folderId: driveFolder,
+      clientId: driveClientId,
+      accessToken: driveAccessToken
+    });
+    if (!credentials.clientId.trim()) {
       addWarning('Enter a browser OAuth client ID before authorizing Drive.');
       return;
     }
+    await storage.putConfig('driveCredentials', credentials);
+    setDriveFolder(credentials.folderId);
+    setDriveClientId(credentials.clientId);
     const url = await createDriveAuthorizationUrl({
-      clientId: driveClientId.trim(),
+      clientId: credentials.clientId,
       redirectUri: window.location.origin + window.location.pathname
     });
     window.location.href = url;
@@ -358,7 +392,12 @@ export function App(): JSX.Element {
             </label>
             <label className="field">
               Access token
-              <input value={driveAccessToken} onChange={(event) => setDriveAccessToken(event.target.value)} />
+              <input
+                placeholder="Created after Authorize"
+                type="password"
+                value={driveAccessToken}
+                onChange={(event) => setDriveAccessToken(event.target.value)}
+              />
             </label>
             <button type="button" onClick={authorizeDrive}>
               <Play size={16} /> Authorize
