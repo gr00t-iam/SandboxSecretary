@@ -38,7 +38,8 @@ import {
 } from '../services/defaultConfig';
 import { SecretaryStorage } from '../services/storage';
 import { SyncManager } from '../services/sync';
-import { polishTranscript, translateTextOffline } from '../services/textProcessing';
+import { polishTranscript, translateText, translateTextOffline } from '../services/textProcessing';
+import { isGemmaReady, isGemmaSupported, polishWithGemma, translateWithGemma } from '../services/gemmaEngine';
 
 const storage = new SecretaryStorage();
 const defaultMetrics: CacheMetrics = { documents: 0, pending: 0, failed: 0, synced: 0 };
@@ -85,6 +86,7 @@ export function App(): JSX.Element {
   const [recording, setRecording] = useState(false);
   const [level, setLevel] = useState(0);
   const [phase, setPhase] = useState(0);
+  const [notice, setNotice] = useState('');
   const [selectedId, setSelectedId] = useState<string>();
 
   const aiClient = useRef<AiWorkerClient>();
@@ -222,19 +224,72 @@ export function App(): JSX.Element {
 
   async function runPolish(text = rawText): Promise<void> {
     const preparedText = applyGlossary(text);
+    if (!preparedText.trim()) {
+      flash('Add some text to polish');
+      return;
+    }
     setState('processing-local-polish');
-    const fallback = polishTranscript(preparedText, polishOptions);
-    const polished = aiClient.current?.isReady() ? await aiClient.current.polish(preparedText, polishOptions) : fallback;
-    setPolishedText(polished || fallback);
-    setTranslatedText('');
-    setState('system-ready');
+    const heuristic = polishTranscript(preparedText, polishOptions);
+    try {
+      if (!isGemmaSupported()) {
+        throw new Error('WebGPU unavailable');
+      }
+      flash('Polishing with Gemma 4 E2B…');
+      const polished = await polishWithGemma(
+        preparedText,
+        polishOptions,
+        (partial) => {
+          setTranslatedText('');
+          setPolishedText(partial);
+        },
+        (progress) => flash(progress)
+      );
+      setTranslatedText('');
+      setPolishedText(polished || heuristic);
+      flash('Polished with Gemma 4 E2B');
+    } catch {
+      // Gemma needs WebGPU + a large one-time download; fall back instantly.
+      setTranslatedText('');
+      setPolishedText(heuristic);
+      flash(isGemmaSupported() ? 'Polished (Gemma unavailable — used quick polish)' : 'Polished (no WebGPU — used quick polish)');
+    } finally {
+      setState('system-ready');
+    }
   }
 
   async function runTranslate(text = polishedText || rawText): Promise<void> {
     const preparedText = applyGlossary(text);
-    const fallback = translateTextOffline(preparedText, sourceLang, targetLang);
-    const translated = aiClient.current?.isReady() ? await aiClient.current.translate(preparedText, sourceLang, targetLang) : fallback;
-    setTranslatedText(translated || fallback);
+    if (!preparedText.trim()) {
+      flash('Add some text to translate');
+      return;
+    }
+    if (sourceLang === targetLang) {
+      setTranslatedText(preparedText);
+      flash('Source and target are the same');
+      return;
+    }
+    setState('processing-local-polish');
+    try {
+      if (isGemmaReady()) {
+        // Reuse the already-loaded Gemma 4 engine for higher-quality translation.
+        flash('Translating with Gemma 4 E2B…');
+        const translated = await translateWithGemma(preparedText, sourceLang, targetLang, (partial) => setTranslatedText(partial));
+        setTranslatedText(translated);
+        flash('Translated with Gemma 4 E2B');
+      } else if (navigator.onLine) {
+        const translated = await translateText(preparedText, sourceLang, targetLang);
+        setTranslatedText(translated);
+        flash('Translated');
+      } else {
+        throw new Error('offline');
+      }
+    } catch {
+      // Offline or service hiccup — use the built-in dictionary as a fallback.
+      setTranslatedText(translateTextOffline(preparedText, sourceLang, targetLang));
+      flash('Translated offline (limited)');
+    } finally {
+      setState('system-ready');
+    }
   }
 
   async function saveCurrentDocument(): Promise<void> {
@@ -262,13 +317,19 @@ export function App(): JSX.Element {
     setSelectedId(document.id);
     setState('sync-pending');
     await refreshDocuments();
+    flash('Saved to history');
     if (online) await flushSyncQueue();
   }
 
   async function flushSyncQueue(): Promise<void> {
     const result = await syncManager.flushPending();
-    if (result.failed > 0) {
-      addWarning(`Sync completed with ${result.failed} failed item(s).`);
+    if (result.scanned === 0) {
+      flash('Nothing waiting to sync');
+    } else if (result.failed > 0) {
+      addWarning(`Sync: ${result.synced} sent, ${result.failed} failed.`);
+      flash(`Synced ${result.synced}, ${result.failed} failed`);
+    } else {
+      flash(`Synced ${result.synced} item(s)`);
     }
     await refreshDocuments();
     setState(navigator.onLine ? 'system-ready' : 'offline');
@@ -339,6 +400,54 @@ export function App(): JSX.Element {
     setState('resource-restricted');
   }
 
+  // Brief confirmation shown in the header status pill so actions feel responsive.
+  function flash(message: string): void {
+    setNotice(message);
+    window.setTimeout(() => setNotice((current) => (current === message ? '' : current)), 2600);
+  }
+
+  // Export = download the polished/translated text as Markdown, then queue it.
+  async function exportDocument(): Promise<void> {
+    const text = (translatedText || polishedText || rawText).trim();
+    if (!text) {
+      flash('Nothing to export yet');
+      return;
+    }
+    const blob = new Blob([text], { type: 'text/markdown;charset=utf-8' });
+    const url = URL.createObjectURL(blob);
+    const link = window.document.createElement('a');
+    link.href = url;
+    link.download = `${safeFileName(buildTitle(text))}.md`;
+    window.document.body.appendChild(link);
+    link.click();
+    link.remove();
+    window.setTimeout(() => URL.revokeObjectURL(url), 1000);
+    await saveCurrentDocument();
+    flash('Exported .md and saved');
+  }
+
+  // Read Aloud with a natural Piper voice; falls back to the browser voice.
+  async function readAloud(): Promise<void> {
+    const text = (translatedText || polishedText || rawText).trim();
+    if (!text) {
+      flash('Nothing to read yet');
+      return;
+    }
+    try {
+      flash('Loading natural voice…');
+      const wavUrl = await synthesizeWithPiper(text);
+      window.speechSynthesis.cancel();
+      const audio = new Audio(wavUrl);
+      audio.onended = () => URL.revokeObjectURL(wavUrl);
+      await audio.play();
+      flash('Reading aloud');
+    } catch {
+      // Piper could not load (offline or first-run download blocked) — fall back.
+      speakText(text);
+      flash('Using basic voice (natural voice unavailable)');
+    }
+  }
+
   function applyGlossary(text: string): string {
     return glossaryTerms.reduce((output, term) => {
       const escaped = term.key.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
@@ -363,7 +472,7 @@ export function App(): JSX.Element {
             <h1>Sandbox Secretary</h1>
             <span className={`friendly-status ${status === 'Offline Mode' ? 'offline' : ''}`}>
               <span />
-              {status}
+              {notice || status}
             </span>
           </div>
           <button className="icon-button" type="button" aria-label="Open settings" onClick={() => setSettingsOpen(true)}>
@@ -418,7 +527,7 @@ export function App(): JSX.Element {
               }}
               placeholder="Your polished text will appear here."
             />
-            <button className="listen-button" type="button" onClick={() => speakText(outputText)}>
+            <button className="listen-button" type="button" onClick={() => readAloud()}>
               <Volume2 size={18} /> Read Aloud
             </button>
           </label>
@@ -437,7 +546,7 @@ export function App(): JSX.Element {
           <button className="translate-action" type="button" onClick={() => runTranslate()}>
             <Globe2 size={18} /> Translate
           </button>
-          <button className="export-action" type="button" onClick={saveCurrentDocument}>
+          <button className="export-action" type="button" onClick={exportDocument}>
             <UploadCloud size={18} /> Export
           </button>
         </nav>
@@ -796,4 +905,27 @@ function speakText(text: string): void {
   if (!text.trim() || !('speechSynthesis' in window)) return;
   window.speechSynthesis.cancel();
   window.speechSynthesis.speak(new SpeechSynthesisUtterance(text));
+}
+
+// Piper TTS (VITS) loaded from CDN at runtime — kept out of the bundle so the
+// build stays lean. The voice model is downloaded once and cached by the lib.
+let piperModule: any = null;
+
+async function synthesizeWithPiper(text: string): Promise<string> {
+  if (!piperModule) {
+    const moduleUrl = 'https://cdn.jsdelivr.net/npm/@diffusionstudio/vits-web@1.0.3/+esm';
+    piperModule = await import(/* @vite-ignore */ moduleUrl);
+  }
+  const wav: Blob = await piperModule.predict({ text, voiceId: 'en_US-amy-medium' });
+  return URL.createObjectURL(wav);
+}
+
+function safeFileName(value: string): string {
+  return (
+    value
+      .toLowerCase()
+      .replace(/[^a-z0-9]+/g, '-')
+      .replace(/^-+|-+$/g, '')
+      .slice(0, 64) || 'sandbox-secretary-note'
+  );
 }
