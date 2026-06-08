@@ -27,7 +27,7 @@ import { useEffect, useMemo, useRef, useState } from 'react';
 import type { CacheMetrics, ModelState, PolishOptions, SecretaryDocument, SyncDestination } from '../types';
 import { AiWorkerClient } from '../services/aiWorkerClient';
 import { AudioPipeline } from '../services/audioPipeline';
-import { createDriveAuthorizationUrl, exchangeDriveAuthorizationCode, readAuthorizationCodeFromLocation } from '../services/oauth';
+import { GOOGLE_OAUTH_SCOPES, requestGoogleAccessToken } from '../services/oauth';
 import { registerServiceWorker, subscribeToNetworkStatus } from '../services/pwa';
 import {
   DEFAULT_DRIVE_CLIENT_ID,
@@ -84,6 +84,7 @@ export function App(): JSX.Element {
 
   const [recording, setRecording] = useState(false);
   const [level, setLevel] = useState(0);
+  const [phase, setPhase] = useState(0);
   const [selectedId, setSelectedId] = useState<string>();
 
   const aiClient = useRef<AiWorkerClient>();
@@ -143,6 +144,19 @@ export function App(): JSX.Element {
     return () => window.removeEventListener('keydown', handleKeyDown);
   });
 
+  // Animate the dictation waveform smoothly while recording, independent of how
+  // often audio level callbacks fire, so the bars always move when listening.
+  useEffect(() => {
+    if (!recording) return;
+    let raf = 0;
+    const loop = (): void => {
+      setPhase((value) => value + 1);
+      raf = requestAnimationFrame(loop);
+    };
+    raf = requestAnimationFrame(loop);
+    return () => cancelAnimationFrame(raf);
+  }, [recording]);
+
   async function refreshDocuments(): Promise<void> {
     const [nextDocuments, nextMetrics] = await Promise.all([storage.listDocuments(), storage.getMetrics()]);
     setDocuments(nextDocuments);
@@ -155,31 +169,11 @@ export function App(): JSX.Element {
     setDriveClientId(saved.clientId);
     setDriveAccessToken(saved.accessToken ?? '');
     setRecipient((current) => current.trim() || DEFAULT_EMAIL_RECIPIENT);
-
-    await completeDriveOAuthIfPresent(saved);
   }
 
   async function loadGlossaryTerms(): Promise<void> {
     const saved = await storage.getConfig<GlossaryTerm[]>('glossaryTerms');
     setGlossaryTerms(Array.isArray(saved) ? saved : defaultGlossaryTerms);
-  }
-
-  async function completeDriveOAuthIfPresent(credentials: DriveCredentials): Promise<void> {
-    const code = readAuthorizationCodeFromLocation();
-    if (!code || !credentials.clientId) return;
-    try {
-      const token = await exchangeDriveAuthorizationCode(code, {
-        clientId: credentials.clientId,
-        redirectUri: window.location.origin + window.location.pathname
-      });
-      const nextCredentials = { ...credentials, accessToken: token };
-      await storage.putConfig('driveCredentials', nextCredentials);
-      setDriveAccessToken(token);
-      window.history.replaceState({}, document.title, window.location.pathname);
-      setWarnings((current) => [...current.slice(-2), 'Google Drive authorization saved locally.']);
-    } catch (error) {
-      addWarning(error);
-    }
   }
 
   async function toggleRecording(): Promise<void> {
@@ -192,12 +186,16 @@ export function App(): JSX.Element {
 
   async function startRecording(): Promise<void> {
     try {
-      audioController.current = new AudioPipeline((text) => {
-        setRawText(text);
-      }, setLevel);
+      audioController.current = new AudioPipeline(
+        (text) => {
+          setRawText(text);
+        },
+        setLevel,
+        (warning) => addWarning(warning)
+      );
 
       await audioController.current.initialize();
-      await audioController.current.startRecording();
+      await audioController.current.startRecording(rawText, sourceLang);
 
       setRecording(true);
       setState('recording-active');
@@ -286,14 +284,18 @@ export function App(): JSX.Element {
       addWarning('Enter a browser OAuth client ID before authorizing Drive.');
       return;
     }
-    await storage.putConfig('driveCredentials', credentials);
-    setDriveFolder(credentials.folderId);
-    setDriveClientId(credentials.clientId);
-    const url = await createDriveAuthorizationUrl({
-      clientId: credentials.clientId,
-      redirectUri: window.location.origin + window.location.pathname
-    });
-    window.location.href = url;
+    try {
+      // Google Identity Services popup returns an access token for Drive + Gmail.
+      const token = await requestGoogleAccessToken(credentials.clientId, GOOGLE_OAUTH_SCOPES, 'consent');
+      const nextCredentials = { ...credentials, accessToken: token.accessToken, expiresAt: token.expiresAt };
+      await storage.putConfig('driveCredentials', nextCredentials);
+      setDriveFolder(nextCredentials.folderId);
+      setDriveClientId(nextCredentials.clientId);
+      setDriveAccessToken(token.accessToken);
+      setWarnings((current) => [...current.slice(-2), 'Google Drive and Gmail authorized. Credentials saved on this device.']);
+    } catch (error) {
+      addWarning(error);
+    }
   }
 
   async function resetDriveCredentials(): Promise<void> {
@@ -382,7 +384,11 @@ export function App(): JSX.Element {
               <span
                 key={bar}
                 style={{
-                  height: `${Math.max(14, 18 + Math.sin(bar * 0.7) * 14 + level * 72)}px`
+                  height: `${
+                    recording
+                      ? Math.max(6, 12 + Math.abs(Math.sin(bar * 0.5 + phase * 0.12)) * (12 + level * 460))
+                      : Math.max(14, 18 + Math.sin(bar * 0.7) * 14)
+                  }px`
                 }}
               />
             ))}
