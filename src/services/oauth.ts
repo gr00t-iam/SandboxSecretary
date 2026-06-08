@@ -1,77 +1,117 @@
-const CODE_VERIFIER_KEY = 'sandbox-secretary-drive-code-verifier';
+// Google Identity Services (GIS) token-client OAuth for a browser-only SPA.
+// Replaces the old redirect + PKCE code flow (which failed because Google's
+// token endpoint blocks browser CORS for web clients). The token client opens
+// a popup and hands back an access token directly — no server, no secret.
 
-export interface DriveOAuthConfig {
-  clientId: string;
-  redirectUri: string;
-  scope?: string;
+export const GOOGLE_OAUTH_SCOPES =
+  'https://www.googleapis.com/auth/drive.file https://www.googleapis.com/auth/gmail.send';
+export const GMAIL_SEND_ENDPOINT =
+  'https://gmail.googleapis.com/gmail/v1/users/me/messages/send';
+
+const GIS_SRC = 'https://accounts.google.com/gsi/client';
+
+export interface GoogleTokenResult {
+  accessToken: string;
+  expiresAt: number; // epoch milliseconds
 }
 
-export async function createDriveAuthorizationUrl(config: DriveOAuthConfig): Promise<string> {
-  const verifier = base64UrlEncode(crypto.getRandomValues(new Uint8Array(32)));
-  const challenge = await sha256Base64Url(verifier);
-  sessionStorage.setItem(CODE_VERIFIER_KEY, verifier);
+interface GisTokenResponse {
+  access_token?: string;
+  expires_in?: number;
+  error?: string;
+  error_description?: string;
+}
 
-  const params = new URLSearchParams({
-    client_id: config.clientId,
-    redirect_uri: config.redirectUri,
-    response_type: 'code',
-    scope: config.scope ?? 'https://www.googleapis.com/auth/drive.file',
-    code_challenge: challenge,
-    code_challenge_method: 'S256',
-    access_type: 'online',
-    prompt: 'consent'
+// Injects the GIS script once and resolves when its oauth2 namespace is ready.
+export function loadGoogleIdentityServices(timeoutMs = 8000): Promise<any> {
+  return new Promise<any>((resolve, reject) => {
+    const w = window as unknown as { google?: any };
+    const ready = (): any => w.google?.accounts?.oauth2;
+    if (ready()) {
+      resolve(ready());
+      return;
+    }
+    if (!document.querySelector(`script[src="${GIS_SRC}"]`)) {
+      const script = document.createElement('script');
+      script.src = GIS_SRC;
+      script.async = true;
+      script.defer = true;
+      script.onerror = () => reject(new Error('Failed to load the Google sign-in library.'));
+      document.head.appendChild(script);
+    }
+    const start = Date.now();
+    const poll = (): void => {
+      if (ready()) {
+        resolve(ready());
+        return;
+      }
+      if (Date.now() - start > timeoutMs) {
+        reject(
+          new Error(
+            'Google sign-in library could not load. Check your connection, and serve the app over http(s) — Google OAuth does not work from a file:// URL.'
+          )
+        );
+        return;
+      }
+      window.setTimeout(poll, 120);
+    };
+    poll();
   });
-
-  return `https://accounts.google.com/o/oauth2/v2/auth?${params.toString()}`;
 }
 
-export async function exchangeDriveAuthorizationCode(
-  code: string,
-  config: DriveOAuthConfig,
-  fetchImpl: typeof fetch = fetch
-): Promise<string> {
-  const verifier = sessionStorage.getItem(CODE_VERIFIER_KEY);
-  if (!verifier) {
-    throw new Error('Missing OAuth verifier for Drive authorization.');
-  }
+let cachedClient: any = null;
+let cachedClientId = '';
+let pendingResolve: ((response: GisTokenResponse) => void) | null = null;
+let pendingReject: ((error: Error) => void) | null = null;
 
-  const body = new URLSearchParams({
-    client_id: config.clientId,
-    redirect_uri: config.redirectUri,
-    grant_type: 'authorization_code',
-    code,
-    code_verifier: verifier
+async function getTokenClient(clientId: string, scope: string): Promise<any> {
+  const oauth2 = await loadGoogleIdentityServices();
+  if (cachedClient && cachedClientId === clientId) return cachedClient;
+  cachedClient = oauth2.initTokenClient({
+    client_id: clientId,
+    scope,
+    callback: (response: GisTokenResponse) => {
+      if (response && !response.error && response.access_token) {
+        pendingResolve?.(response);
+      } else {
+        pendingReject?.(
+          new Error('Google authorization failed: ' + (response?.error_description || response?.error || 'no access token returned'))
+        );
+      }
+      pendingResolve = null;
+      pendingReject = null;
+    },
+    error_callback: (err: { type?: string }) => {
+      pendingReject?.(new Error('Google sign-in was cancelled or blocked (' + (err?.type || 'popup closed') + '). Allow pop-ups and try again.'));
+      pendingResolve = null;
+      pendingReject = null;
+    }
   });
-  const response = await fetchImpl('https://oauth2.googleapis.com/token', {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
-    body
+  cachedClientId = clientId;
+  return cachedClient;
+}
+
+// Requests an access token through the GIS popup.
+// prompt='consent' is interactive; prompt='' attempts a silent refresh.
+export async function requestGoogleAccessToken(
+  clientId: string,
+  scope: string = GOOGLE_OAUTH_SCOPES,
+  prompt: '' | 'consent' = 'consent'
+): Promise<GoogleTokenResult> {
+  const client = await getTokenClient(clientId, scope);
+  const response = await new Promise<GisTokenResponse>((resolve, reject) => {
+    pendingResolve = resolve;
+    pendingReject = reject;
+    try {
+      client.requestAccessToken({ prompt });
+    } catch (error) {
+      pendingResolve = null;
+      pendingReject = null;
+      reject(error instanceof Error ? error : new Error(String(error)));
+    }
   });
-  if (!response.ok) {
-    throw new Error(`Drive OAuth exchange failed with ${response.status}.`);
-  }
-
-  const payload = (await response.json()) as { access_token?: string };
-  if (!payload.access_token) {
-    throw new Error('Drive OAuth response did not include an access token.');
-  }
-  sessionStorage.removeItem(CODE_VERIFIER_KEY);
-  return payload.access_token;
-}
-
-export function readAuthorizationCodeFromLocation(location: Location = window.location): string | undefined {
-  const params = new URLSearchParams(location.search);
-  return params.get('code') ?? undefined;
-}
-
-function base64UrlEncode(bytes: Uint8Array): string {
-  return btoa(String.fromCharCode(...bytes))
-    .replace(/\+/g, '-')
-    .replace(/\//g, '_')
-    .replace(/=+$/g, '');
-}
-
-async function sha256Base64Url(value: string): Promise<string> {
-  const digest = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(value));
-  return base64UrlEncode(new Uint8Array(digest));
+  return {
+    accessToken: response.access_token as string,
+    expiresAt: Date.now() + Number(response.expires_in || 3600) * 1000
+  };
 }

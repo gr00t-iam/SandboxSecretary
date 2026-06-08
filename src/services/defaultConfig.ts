@@ -6,6 +6,7 @@ export interface DriveCredentials {
   folderId: string;
   clientId: string;
   accessToken?: string;
+  expiresAt?: number;
 }
 
 export const DEFAULT_DRIVE_CREDENTIALS: DriveCredentials = {
@@ -17,6 +18,7 @@ export function withDefaultDriveCredentials(credentials?: Partial<DriveCredentia
   return {
     folderId: credentials?.folderId?.trim() || DEFAULT_DRIVE_FOLDER_ID,
     clientId: credentials?.clientId?.trim() || DEFAULT_DRIVE_CLIENT_ID,
-    accessToken: credentials?.accessToken?.trim() || undefined
+    accessToken: credentials?.accessToken?.trim() || undefined,
+    expiresAt: credentials?.expiresAt
   };
 }

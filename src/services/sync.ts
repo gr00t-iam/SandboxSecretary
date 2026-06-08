@@ -1,6 +1,7 @@
 import type { SecretaryDocument } from '../types';
 import type { DriveCredentials } from './defaultConfig';
 import type { SecretaryStorage } from './storage';
+import { GMAIL_SEND_ENDPOINT } from './oauth';
 
 interface SyncDependencies {
   isOnline: () => boolean;
@@ -50,11 +51,28 @@ export class SyncManager {
 
   private async syncDocument(document: SecretaryDocument): Promise<void> {
     if (document.sync_destination.type === 'email') {
-      this.dependencies.openMailto(buildMailtoHref(document));
+      await this.sendEmail(document);
       return;
     }
 
     await uploadToDrive(document, this.fetchImpl, this.dependencies.getDriveCredentials);
+  }
+
+  // Sends the note via the Gmail API when Google is authorized (a real send with
+  // no mail client); otherwise hands off to the system mailto: handler.
+  private async sendEmail(document: SecretaryDocument): Promise<void> {
+    const recipient = document.sync_destination.type === 'email' ? document.sync_destination.path_or_recipient : '';
+    const credentials = await this.dependencies.getDriveCredentials?.();
+    const token = credentials?.accessToken;
+    if (token) {
+      try {
+        await sendGmailMessage(document, recipient, token, this.fetchImpl);
+        return;
+      } catch {
+        // Gmail failed (token, scope, or network) — fall back to mailto below.
+      }
+    }
+    this.dependencies.openMailto(buildMailtoHref(document));
   }
 }
 
@@ -63,6 +81,48 @@ export function buildMailtoHref(document: SecretaryDocument): string {
   const subject = encodeURIComponent(`Sandbox Secretary: ${document.title}`);
   const body = encodeURIComponent(`${document.polished_text}\n\n---\nRaw transcript:\n${document.raw_transcript}`);
   return `mailto:${recipient}?subject=${subject}&body=${body}`;
+}
+
+async function sendGmailMessage(
+  document: SecretaryDocument,
+  recipient: string,
+  token: string,
+  fetchImpl: typeof fetch
+): Promise<void> {
+  const subject = `Sandbox Secretary: ${document.title}`;
+  const body = `${document.polished_text}\n\n---\nRaw transcript:\n${document.raw_transcript}`;
+  const response = await fetchImpl(GMAIL_SEND_ENDPOINT, {
+    method: 'POST',
+    headers: {
+      Authorization: `Bearer ${token}`,
+      'Content-Type': 'application/json'
+    },
+    body: JSON.stringify({ raw: buildRawEmail(recipient, subject, body) })
+  });
+  if (!response.ok) {
+    throw new Error(`Gmail API send failed with ${response.status}.`);
+  }
+}
+
+// Builds an RFC 2822 message and base64url-encodes it for the Gmail API.
+function buildRawEmail(to: string, subject: string, body: string): string {
+  const message =
+    `To: ${to}\r\n` +
+    `Subject: =?UTF-8?B?${base64Utf8(subject)}?=\r\n` +
+    'MIME-Version: 1.0\r\n' +
+    'Content-Type: text/plain; charset="UTF-8"\r\n' +
+    'Content-Transfer-Encoding: base64\r\n\r\n' +
+    base64Utf8(body);
+  return base64Utf8(message).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/g, '');
+}
+
+function base64Utf8(value: string): string {
+  const bytes = new TextEncoder().encode(value);
+  let binary = '';
+  bytes.forEach((byte) => {
+    binary += String.fromCharCode(byte);
+  });
+  return btoa(binary);
 }
 
 async function uploadToDrive(
