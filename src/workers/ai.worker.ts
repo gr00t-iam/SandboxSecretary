@@ -1,4 +1,5 @@
 import type { PolishOptions } from '../types';
+import { polishTranscript, translateTextOffline } from '../services/textProcessing';
 
 type IncomingMessage =
   | { type: 'initialize'; sttModel: string; llmModel: string }
@@ -29,7 +30,14 @@ self.onmessage = async (event: MessageEvent<IncomingMessage>) => {
   }
   
   if (message.type === 'polish') {
-    // Return the text back untouched to prevent UI freezing
-    self.postMessage({ type: 'polished', id: message.id, text: message.text });
+    self.postMessage({ type: 'polished', id: message.id, text: polishTranscript(message.text, message.options) });
+  }
+
+  if (message.type === 'translate') {
+    self.postMessage({
+      type: 'translated',
+      id: message.id,
+      text: translateTextOffline(message.text, message.sourceLang, message.targetLang)
+    });
   }
 };
