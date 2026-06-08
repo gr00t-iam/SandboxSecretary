@@ -1,18 +1,20 @@
 // Real on-device LLM polishing + translation with Gemma 4 E2B via Google's
-// MediaPipe LLM Inference (LiteRT) runtime. The runtime + the browser-optimized
-// .task model load at runtime (never bundled). The model (~2 GB) is downloaded
-// once and cached in the Origin Private File System (OPFS), so later sessions
-// reuse it instead of re-downloading.
+// MediaPipe LLM Inference (LiteRT) runtime. Runtime + model load at runtime
+// (never bundled). The ~2 GB .task model is downloaded ONCE, written to the
+// Origin Private File System (OPFS) in small chunks, and reused on every later
+// visit. Model bytes are cached separately from the engine, so a failed engine
+// init never forces a re-download.
 //
 // Requirements: WebGPU (Chrome/Edge). The community build is Apache-2.0 and
-// ungated, so no Hugging Face token is needed. Callers MUST provide a fallback
-// for browsers without WebGPU or when the download/cache is unavailable.
+// ungated (no Hugging Face token needed). Callers MUST provide a fallback.
 
 const MEDIAPIPE_ESM = 'https://esm.sh/@mediapipe/tasks-genai@0.10.27';
 const MEDIAPIPE_WASM = 'https://cdn.jsdelivr.net/npm/@mediapipe/tasks-genai@0.10.27/wasm';
 const GEMMA4_E2B_WEB_TASK =
   'https://huggingface.co/litert-community/gemma-4-E2B-it-litert-lm/resolve/main/gemma-4-E2B-it-web.task?download=true';
 const OPFS_MODEL_NAME = 'gemma-4-E2B-it-web.task';
+const MIN_VALID_MODEL_BYTES = 100 * 1024 * 1024; // guard against truncated cache
+const OPFS_WRITE_CHUNK = 8 * 1024 * 1024; // 8 MB writes are far more reliable than one 2 GB blob
 
 export interface GemmaPolishOptions {
   concise: number;
@@ -28,28 +30,37 @@ const LANGUAGE_NAMES: Record<string, string> = {
   ja: 'Japanese'
 };
 
+let modelBytesPromise: Promise<Uint8Array> | null = null;
 let enginePromise: Promise<any> | null = null;
 let engineReady = false;
 
-// WebGPU is mandatory for the MediaPipe LLM runtime.
 export function isGemmaSupported(): boolean {
   return typeof navigator !== 'undefined' && 'gpu' in navigator;
 }
 
-// True only once the model is fully loaded — used to route Translate through
-// Gemma without triggering the multi-GB download just for a translation.
+// True only once the model is fully loaded — lets Translate reuse the engine
+// without ever triggering the multi-GB download on its own.
 export function isGemmaReady(): boolean {
   return engineReady;
 }
 
 // --- OPFS model cache --------------------------------------------------------
-async function readModelFromOpfs(): Promise<Uint8Array | null> {
+async function getOpfsRoot(): Promise<any | null> {
   try {
     if (!navigator.storage?.getDirectory) return null;
-    const root = await navigator.storage.getDirectory();
+    return await navigator.storage.getDirectory();
+  } catch {
+    return null;
+  }
+}
+
+async function readModelFromOpfs(): Promise<Uint8Array | null> {
+  try {
+    const root = await getOpfsRoot();
+    if (!root) return null;
     const handle = await root.getFileHandle(OPFS_MODEL_NAME);
     const file = await handle.getFile();
-    if (!file.size) return null;
+    if (!file || file.size < MIN_VALID_MODEL_BYTES) return null; // missing/partial
     return new Uint8Array(await file.arrayBuffer());
   } catch {
     return null; // not cached yet (getFileHandle throws) or OPFS unavailable
@@ -58,15 +69,16 @@ async function readModelFromOpfs(): Promise<Uint8Array | null> {
 
 async function writeModelToOpfs(bytes: Uint8Array): Promise<void> {
   try {
-    if (!navigator.storage?.getDirectory) return;
-    const root = await navigator.storage.getDirectory();
+    const root = await getOpfsRoot();
+    if (!root) return;
     const handle = await root.getFileHandle(OPFS_MODEL_NAME, { create: true });
-    const writable = await handle.createWritable();
-    // Cast: lib DOM types are strict about shared-vs-non-shared buffers here.
-    await (writable as { write: (data: Uint8Array) => Promise<void> }).write(bytes);
+    const writable = (await handle.createWritable()) as { write: (d: Uint8Array) => Promise<void>; close: () => Promise<void> };
+    for (let offset = 0; offset < bytes.length; offset += OPFS_WRITE_CHUNK) {
+      await writable.write(bytes.subarray(offset, Math.min(offset + OPFS_WRITE_CHUNK, bytes.length)));
+    }
     await writable.close();
   } catch {
-    // Best-effort cache (e.g. quota exceeded) — failure just means re-download.
+    // Best-effort cache (quota/permission) — failure just means re-download later.
   }
 }
 
@@ -97,26 +109,42 @@ async function downloadModel(onProgress?: (message: string) => void): Promise<Ui
   return bytes;
 }
 
+// Resolves the model bytes from OPFS, or downloads + caches them. Cached as its
+// own promise so engine-init failures never cause a re-download.
+function loadModelBytes(onProgress?: (message: string) => void): Promise<Uint8Array> {
+  if (modelBytesPromise) return modelBytesPromise;
+  modelBytesPromise = (async () => {
+    // Ask for durable storage so the browser keeps the 2 GB cache around.
+    try {
+      await navigator.storage?.persist?.();
+    } catch {
+      /* ignore */
+    }
+    const cached = await readModelFromOpfs();
+    if (cached) {
+      onProgress?.('Loading cached Gemma 4 model…');
+      return cached;
+    }
+    onProgress?.('Downloading Gemma 4 E2B (~2 GB, first run only)…');
+    const bytes = await downloadModel(onProgress);
+    onProgress?.('Caching Gemma 4 model for next time…');
+    await writeModelToOpfs(bytes);
+    return bytes;
+  })().catch((error) => {
+    modelBytesPromise = null; // allow a later retry of the download
+    throw error instanceof Error ? error : new Error(String(error));
+  });
+  return modelBytesPromise;
+}
+
 async function getEngine(onProgress?: (message: string) => void): Promise<any> {
   if (enginePromise) return enginePromise;
   enginePromise = (async () => {
     onProgress?.('Loading Gemma 4 runtime…');
     const mediapipe = await import(/* @vite-ignore */ MEDIAPIPE_ESM);
-    const FilesetResolver = mediapipe.FilesetResolver;
-    const LlmInference = mediapipe.LlmInference;
-    const genai = await FilesetResolver.forGenAiTasks(MEDIAPIPE_WASM);
-
-    let modelBytes = await readModelFromOpfs();
-    if (modelBytes) {
-      onProgress?.('Loading cached Gemma 4 model…');
-    } else {
-      onProgress?.('Downloading Gemma 4 E2B (~2 GB, first run only)…');
-      modelBytes = await downloadModel(onProgress);
-      onProgress?.('Caching Gemma 4 model for next time…');
-      await writeModelToOpfs(modelBytes);
-    }
-
-    const engine = await LlmInference.createFromOptions(genai, {
+    const genai = await mediapipe.FilesetResolver.forGenAiTasks(MEDIAPIPE_WASM);
+    const modelBytes = await loadModelBytes(onProgress);
+    const engine = await mediapipe.LlmInference.createFromOptions(genai, {
       baseOptions: { modelAssetBuffer: modelBytes },
       maxTokens: 4096,
       topK: 40,
@@ -126,14 +154,13 @@ async function getEngine(onProgress?: (message: string) => void): Promise<any> {
     engineReady = true;
     return engine;
   })().catch((error) => {
-    enginePromise = null;
+    enginePromise = null; // model stays cached; only the engine is retried
     engineReady = false;
     throw error instanceof Error ? error : new Error(String(error));
   });
   return enginePromise;
 }
 
-// Shared streaming generation helper.
 function generate(engine: any, prompt: string, onPartial?: (partial: string) => void): Promise<string> {
   if (typeof onPartial === 'function') {
     return new Promise<string>((resolve, reject) => {
@@ -152,7 +179,6 @@ function generate(engine: any, prompt: string, onPartial?: (partial: string) => 
   return Promise.resolve(engine.generateResponse(prompt)).then((result) => String(result).trim());
 }
 
-// Polish dictated text with Gemma 4 E2B (streams partial output via onPartial).
 export async function polishWithGemma(
   text: string,
   options: GemmaPolishOptions,
@@ -166,8 +192,6 @@ export async function polishWithGemma(
   return generate(engine, buildPolishPrompt(text, options), onPartial);
 }
 
-// Translate with Gemma 4 E2B. Intended to be called only when isGemmaReady() is
-// true, so it reuses the already-loaded engine rather than starting a download.
 export async function translateWithGemma(
   text: string,
   sourceLang: string,
