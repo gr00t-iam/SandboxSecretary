@@ -85,7 +85,6 @@ export function App(): JSX.Element {
 
   const [recording, setRecording] = useState(false);
   const [level, setLevel] = useState(0);
-  const [phase, setPhase] = useState(0);
   const [notice, setNotice] = useState('');
   const [selectedId, setSelectedId] = useState<string>();
 
@@ -145,19 +144,6 @@ export function App(): JSX.Element {
     window.addEventListener('keydown', handleKeyDown);
     return () => window.removeEventListener('keydown', handleKeyDown);
   });
-
-  // Animate the dictation waveform smoothly while recording, independent of how
-  // often audio level callbacks fire, so the bars always move when listening.
-  useEffect(() => {
-    if (!recording) return;
-    let raf = 0;
-    const loop = (): void => {
-      setPhase((value) => value + 1);
-      raf = requestAnimationFrame(loop);
-    };
-    raf = requestAnimationFrame(loop);
-    return () => cancelAnimationFrame(raf);
-  }, [recording]);
 
   async function refreshDocuments(): Promise<void> {
     const [nextDocuments, nextMetrics] = await Promise.all([storage.listDocuments(), storage.getMetrics()]);
@@ -488,16 +474,17 @@ export function App(): JSX.Element {
             <h2>{recording ? 'Recording' : 'Start Dictation'}</h2>
             <p>{recording ? 'Tap to pause and polish your words' : 'Tap to start speaking'}</p>
           </div>
-          <div className="waveform" aria-label="Audio waveform">
+          <div
+            className={`waveform ${recording ? 'recording' : ''}`}
+            aria-label="Audio waveform"
+            style={{ ['--lvl']: level } as React.CSSProperties}
+          >
             {waveformBars.map((bar) => (
               <span
                 key={bar}
                 style={{
-                  height: `${
-                    recording
-                      ? Math.max(6, 12 + Math.abs(Math.sin(bar * 0.5 + phase * 0.12)) * (12 + level * 460))
-                      : Math.max(14, 18 + Math.sin(bar * 0.7) * 14)
-                  }px`
+                  height: `${Math.max(14, 18 + Math.sin(bar * 0.7) * 14)}px`,
+                  animationDelay: `${(bar % 10) * 0.07}s`
                 }}
               />
             ))}

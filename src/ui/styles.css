@@ -208,8 +208,24 @@ button {
   border-radius: 999px;
   display: block;
   opacity: 0.9;
+  transform-origin: center;
   transition: height 120ms ease-out;
   width: 0.22rem;
+  will-change: transform;
+}
+
+/* Animate the bars while dictating; amplitude scales with --lvl (mic level). */
+.waveform.recording span {
+  animation: ss-wave 0.85s ease-in-out infinite;
+}
+
+@keyframes ss-wave {
+  0%, 100% { transform: scaleY(calc(0.4 + var(--lvl, 0) * 1)); }
+  50% { transform: scaleY(calc(1.1 + var(--lvl, 0) * 2)); }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .waveform.recording span { animation: none; }
 }
 
 .text-grid {
