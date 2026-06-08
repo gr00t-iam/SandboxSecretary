@@ -23,8 +23,10 @@ export class AudioPipeline {
     this.context = new AudioContext({ sampleRate: 16000 });
     this.stream = await navigator.mediaDevices.getUserMedia({ audio: true });
     
-    // Explicitly using the subfolder path for GitHub Pages
-    const workletPath = '/SandboxSecretary/audio-downsampler.worklet.js';
+    const workletPath = new URL(
+      `${normalizeBasePath(import.meta.env.BASE_URL)}audio-downsampler.worklet.js`,
+      window.location.origin
+    ).href;
     await this.context.audioWorklet.addModule(workletPath);
     
     const source = this.context.createMediaStreamSource(this.stream);
@@ -57,4 +59,12 @@ export class AudioPipeline {
     }
     this.onLevelChange(0); // Reset meter to zero
   }
+}
+
+function normalizeBasePath(baseUrl: string): string {
+  if (!baseUrl || baseUrl === './') {
+    return '/';
+  }
+  const withLeadingSlash = baseUrl.startsWith('/') ? baseUrl : `/${baseUrl}`;
+  return withLeadingSlash.endsWith('/') ? withLeadingSlash : `${withLeadingSlash}/`;
 }

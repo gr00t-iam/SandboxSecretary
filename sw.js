@@ -1,22 +1,25 @@
-const VERSION = 'v2';
+const VERSION = 'v5';
 const STATIC_CACHE = `sandbox-secretary-static-${VERSION}`;
 const RUNTIME_CACHE = `sandbox-secretary-runtime-${VERSION}`;
 const MODEL_CACHE = `sandbox-secretary-models-${VERSION}`;
 const CACHE_NAMES = [STATIC_CACHE, RUNTIME_CACHE, MODEL_CACHE];
 
-const CORE_PRECACHE_URLS = ['/', '/index.html', '/manifest.json', '/icons/icon.svg', '/audio-downsampler.worklet.js'];
+const SCOPE_URL = new URL(self.registration.scope);
+const SCOPE_PATH = SCOPE_URL.pathname.endsWith('/') ? SCOPE_URL.pathname : `${SCOPE_URL.pathname}/`;
 
-const OPTIONAL_PRECACHE_URLS = [
-  '/sandbox-secretary.html',
-  '/models/README.md',
-  '/litert/wasm/litert_wasm_internal.js',
-  '/litert/wasm/litert_wasm_internal.wasm',
-  '/litert/wasm/litert_wasm_jspi_internal.js',
-  '/litert/wasm/litert_wasm_jspi_internal.wasm',
-  '/litert/wasm/litert_wasm_threaded_internal.js',
-  '/litert/wasm/litert_wasm_threaded_internal.wasm',
-  '/litert/wasm/litert_wasm_compat_internal.js',
-  '/litert/wasm/litert_wasm_compat_internal.wasm'
+const CORE_PRECACHE_PATHS = ['', 'index.html', 'manifest.json', 'icons/icon.svg', 'audio-downsampler.worklet.js'];
+
+const OPTIONAL_PRECACHE_PATHS = [
+  'sandbox-secretary.html',
+  'models/README.md',
+  'litert/wasm/litert_wasm_internal.js',
+  'litert/wasm/litert_wasm_internal.wasm',
+  'litert/wasm/litert_wasm_jspi_internal.js',
+  'litert/wasm/litert_wasm_jspi_internal.wasm',
+  'litert/wasm/litert_wasm_threaded_internal.js',
+  'litert/wasm/litert_wasm_threaded_internal.wasm',
+  'litert/wasm/litert_wasm_compat_internal.js',
+  'litert/wasm/litert_wasm_compat_internal.wasm'
 ];
 
 const STATIC_DESTINATIONS = new Set(['document', 'script', 'style', 'worker', 'sharedworker', 'image', 'font', 'manifest']);
@@ -42,8 +45,11 @@ self.addEventListener('install', (event) => {
     caches
       .open(STATIC_CACHE)
       .then(async (cache) => {
-        await cache.addAll(CORE_PRECACHE_URLS);
-        await Promise.all(OPTIONAL_PRECACHE_URLS.map((url) => cache.add(url).catch(() => undefined)));
+        await cache.addAll(CORE_PRECACHE_PATHS.map(toScopeUrl));
+        await precacheBuildAssets(cache);
+        await Promise.all(
+          OPTIONAL_PRECACHE_PATHS.map((path) => cache.add(toScopeUrl(path)).catch(() => undefined))
+        );
       })
       .then(() => self.skipWaiting())
   );
@@ -69,7 +75,7 @@ self.addEventListener('fetch', (event) => {
     return;
   }
 
-  if (event.request.mode === 'navigate') {
+  if (request.mode === 'navigate') {
     event.respondWith(offlineShellResponse(request));
     return;
   }
@@ -84,7 +90,7 @@ self.addEventListener('fetch', (event) => {
     return;
   }
 
-  if (url.origin === self.location.origin) {
+  if (urlWithinScope(url)) {
     event.respondWith(networkFirst(request, RUNTIME_CACHE));
   }
 });
@@ -114,15 +120,18 @@ async function offlineShellResponse(request) {
     return response;
   } catch {
     const url = new URL(request.url);
-    const candidates = url.pathname.endsWith('/sandbox-secretary.html')
-      ? ['/sandbox-secretary.html', '/index.html', '/']
-      : ['/index.html', '/', '/sandbox-secretary.html'];
+    const requestedPath = scopeRelativePath(url);
+    const candidates = requestedPath === 'sandbox-secretary.html'
+      ? ['sandbox-secretary.html', 'index.html', '']
+      : ['index.html', '', 'sandbox-secretary.html'];
+
     for (const candidate of candidates) {
-      const cached = await cache.match(candidate);
+      const cached = await cache.match(toScopeUrl(candidate));
       if (cached) {
         return cached;
       }
     }
+
     return new Response('Sandbox Secretary is offline and the app shell is not cached yet.', {
       headers: { 'Content-Type': 'text/plain; charset=utf-8' },
       status: 503,
@@ -232,26 +241,29 @@ function stripRangeHeader(request) {
 }
 
 function isStaticAssetRequest(request, url) {
+  if (!urlWithinScope(url)) {
+    return false;
+  }
+  const pathname = scopeRelativePath(url).toLowerCase();
   return (
-    url.origin === self.location.origin &&
-    (STATIC_DESTINATIONS.has(request.destination) ||
-      STATIC_EXTENSIONS.some((extension) => url.pathname.toLowerCase().endsWith(extension)) ||
-      url.pathname.startsWith('/assets/'))
+    STATIC_DESTINATIONS.has(request.destination) ||
+    STATIC_EXTENSIONS.some((extension) => pathname.endsWith(extension)) ||
+    pathname.startsWith('assets/')
   );
 }
 
 function isModelAssetRequest(request, url) {
   const pathname = url.pathname.toLowerCase();
+  const scopedPath = urlWithinScope(url) ? scopeRelativePath(url).toLowerCase() : pathname;
   const isKnownModelFile = MODEL_EXTENSIONS.some((extension) => pathname.endsWith(extension));
-  const isLocalModel = url.origin === self.location.origin && (pathname.startsWith('/models/') || pathname.startsWith('/litert/wasm/'));
+  const isLocalModel = urlWithinScope(url) && (scopedPath.startsWith('models/') || scopedPath.startsWith('litert/wasm/'));
   const isRemoteModel = MODEL_HOSTS.some((host) => url.hostname === host || url.hostname.endsWith(`.${host}`));
   return isKnownModelFile && (isLocalModel || isRemoteModel || request.destination === 'empty');
 }
 
 function shouldBypassRequest(url) {
   return (
-    url.protocol !== 'http:' &&
-    url.protocol !== 'https:' ||
+    (url.protocol !== 'http:' && url.protocol !== 'https:') ||
     url.hostname === 'www.googleapis.com' ||
     url.hostname === 'googleapis.com' ||
     url.hostname.endsWith('.googleapis.com') ||
@@ -268,7 +280,7 @@ async function cacheUrls(urls) {
   const modelCache = await caches.open(MODEL_CACHE);
   await Promise.all(
     urls.map(async (url) => {
-      const request = new Request(url);
+      const request = scopedRequest(url);
       const parsed = new URL(request.url);
       const cache = isModelAssetRequest(request, parsed) ? modelCache : staticCache;
       const response = await fetch(request);
@@ -287,4 +299,48 @@ async function notifyClients(message) {
       client.postMessage({ type: 'sync' });
     }
   });
+}
+
+async function precacheBuildAssets(cache) {
+  const shellUrl = toScopeUrl('index.html');
+  const response = await fetch(shellUrl, { cache: 'reload' }).catch(() => undefined);
+  if (!response || !response.ok) {
+    return;
+  }
+
+  const copy = response.clone();
+  await cache.put(shellUrl, response);
+  const html = await copy.text();
+  await Promise.all(extractBuildAssetUrls(html).map((url) => cache.add(url).catch(() => undefined)));
+}
+
+function extractBuildAssetUrls(html) {
+  const urls = new Set();
+  const attributePattern = /\b(?:src|href)=["']([^"']+)["']/g;
+  let match = attributePattern.exec(html);
+  while (match) {
+    const url = new URL(match[1], self.registration.scope);
+    const scopedPath = urlWithinScope(url) ? scopeRelativePath(url).toLowerCase() : '';
+    if (scopedPath.startsWith('assets/')) {
+      urls.add(url.href);
+    }
+    match = attributePattern.exec(html);
+  }
+  return Array.from(urls);
+}
+
+function scopedRequest(url) {
+  return new Request(new URL(String(url), self.registration.scope).href);
+}
+
+function toScopeUrl(path) {
+  return new URL(String(path).replace(/^\/+/, ''), self.registration.scope).href;
+}
+
+function urlWithinScope(url) {
+  return url.origin === self.location.origin && url.pathname.startsWith(SCOPE_PATH);
+}
+
+function scopeRelativePath(url) {
+  return url.pathname.slice(SCOPE_PATH.length).replace(/^\/+/, '');
 }

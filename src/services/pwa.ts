@@ -3,17 +3,11 @@ export async function registerServiceWorker(onFlushSync: () => void): Promise<vo
     return;
   }
 
-  // FORCE unregister all existing service workers. 
-  // This cleans up any previous registrations (even from the root domain)
-  // so the new, correctly scoped registration can take over.
-  const registrations = await navigator.serviceWorker.getRegistrations();
-  await Promise.all(registrations.map((registration) => registration.unregister()));
-
   try {
-    // Register the new worker with the correct subfolder path and scope
-    const registration = await navigator.serviceWorker.register('/SandboxSecretary/sw.js', { 
-      scope: '/SandboxSecretary/' 
-    });
+    const basePath = normalizeBasePath(import.meta.env.BASE_URL);
+    const swUrl = new URL(`${basePath}sw.js`, window.location.origin);
+    const scope = new URL(basePath, window.location.origin).pathname;
+    const registration = await navigator.serviceWorker.register(swUrl.href, { scope });
 
     navigator.serviceWorker.addEventListener('message', (event) => {
       if (event.data?.type === 'FLUSH_SYNC_QUEUE') {
@@ -40,4 +34,12 @@ export function subscribeToNetworkStatus(onChange: (online: boolean) => void): (
     window.removeEventListener('online', update);
     window.removeEventListener('offline', update);
   };
+}
+
+function normalizeBasePath(baseUrl: string): string {
+  if (!baseUrl || baseUrl === './') {
+    return '/';
+  }
+  const withLeadingSlash = baseUrl.startsWith('/') ? baseUrl : `/${baseUrl}`;
+  return withLeadingSlash.endsWith('/') ? withLeadingSlash : `${withLeadingSlash}/`;
 }
