@@ -138,3 +138,93 @@ function softenTone(sentence: string): string {
 function escapeRegExp(value: string): string {
   return value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 }
+
+// --- Online translation ------------------------------------------------------
+// Real, full-sentence translation for any supported language via the free
+// MyMemory API (CORS-enabled, no key). Falls back to translateTextOffline when
+// the network is unavailable. Text is chunked to respect the per-request limit.
+
+const TRANSLATION_ENDPOINT = 'https://api.mymemory.translated.net/get';
+const TRANSLATION_CONTACT = 'sandbox-secretary@users.noreply.github.com';
+
+export async function translateText(
+  text: string,
+  sourceLang: string,
+  targetLang: string,
+  fetchImpl: typeof fetch = fetch
+): Promise<string> {
+  const clean = text.trim();
+  if (!clean || sourceLang === targetLang) {
+    return text;
+  }
+
+  const chunks = chunkText(clean, 480);
+  const results: string[] = [];
+  for (const chunk of chunks) {
+    const params = new URLSearchParams({
+      q: chunk,
+      langpair: `${sourceLang}|${targetLang}`,
+      de: TRANSLATION_CONTACT
+    });
+    const response = await fetchImpl(`${TRANSLATION_ENDPOINT}?${params.toString()}`);
+    if (!response.ok) {
+      throw new Error(`Translation service returned HTTP ${response.status}.`);
+    }
+    const data = (await response.json()) as {
+      responseData?: { translatedText?: string };
+      responseStatus?: number | string;
+    };
+    const status = Number(data?.responseStatus ?? 200);
+    const translated = data?.responseData?.translatedText;
+    if (status !== 200 || !translated) {
+      throw new Error('Translation service was unavailable.');
+    }
+    results.push(decodeEntities(translated));
+  }
+  return results.join(' ');
+}
+
+function chunkText(text: string, max: number): string[] {
+  if (text.length <= max) {
+    return [text];
+  }
+  const parts: string[] = [];
+  let current = '';
+  for (const sentence of text.split(/(?<=[.!?])\s+/)) {
+    if (`${current} ${sentence}`.trim().length <= max) {
+      current = `${current} ${sentence}`.trim();
+      continue;
+    }
+    if (current) {
+      parts.push(current);
+      current = '';
+    }
+    if (sentence.length <= max) {
+      current = sentence;
+      continue;
+    }
+    let buffer = '';
+    for (const word of sentence.split(/\s+/)) {
+      if (`${buffer} ${word}`.trim().length <= max) {
+        buffer = `${buffer} ${word}`.trim();
+      } else {
+        if (buffer) parts.push(buffer);
+        buffer = word;
+      }
+    }
+    current = buffer;
+  }
+  if (current) {
+    parts.push(current);
+  }
+  return parts;
+}
+
+function decodeEntities(value: string): string {
+  return value
+    .replace(/&quot;/g, '"')
+    .replace(/&#39;/g, "'")
+    .replace(/&amp;/g, '&')
+    .replace(/&lt;/g, '<')
+    .replace(/&gt;/g, '>');
+}
