@@ -57,6 +57,41 @@ const dictionaries: Record<string, Record<string, string>> = {
     notes: 'notes',
     document: 'document',
     envoyer: 'send'
+  },
+  'en:ja': {
+    hello: 'こんにちは',
+    'thank you': 'ありがとう',
+    thanks: 'ありがとう',
+    goodbye: 'さようなら',
+    yes: 'はい',
+    no: 'いいえ',
+    meeting: '会議',
+    notes: 'メモ',
+    document: '文書',
+    record: '録音',
+    translate: '翻訳',
+    send: '送信',
+    draft: '下書き',
+    today: '今日',
+    tomorrow: '明日',
+    upload: 'アップロード'
+  },
+  'ja:en': {
+    こんにちは: 'hello',
+    ありがとう: 'thank you',
+    さようなら: 'goodbye',
+    はい: 'yes',
+    いいえ: 'no',
+    会議: 'meeting',
+    メモ: 'notes',
+    文書: 'document',
+    録音: 'record',
+    翻訳: 'translate',
+    送信: 'send',
+    下書き: 'draft',
+    今日: 'today',
+    明日: 'tomorrow',
+    アップロード: 'upload'
   }
 };
 
@@ -95,7 +130,10 @@ export function translateTextOffline(text: string, sourceLang: string, targetLan
   let translated = text.toLowerCase();
   const phrases = Object.keys(dictionary).sort((a, b) => b.length - a.length);
   for (const phrase of phrases) {
-    translated = translated.replace(new RegExp(`\\b${escapeRegExp(phrase)}\\b`, 'gi'), dictionary[phrase]);
+    const pattern = containsJapaneseScript(phrase)
+      ? new RegExp(escapeRegExp(phrase), 'g')
+      : new RegExp(`\\b${escapeRegExp(phrase)}\\b`, 'gi');
+    translated = translated.replace(pattern, dictionary[phrase]);
   }
 
   return translated;
@@ -137,6 +175,10 @@ function softenTone(sentence: string): string {
 
 function escapeRegExp(value: string): string {
   return value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+}
+
+function containsJapaneseScript(text: string): boolean {
+  return /[\u3040-\u30ff\u3400-\u4dbf\u4e00-\u9fff]/u.test(text);
 }
 
 // --- Online translation ------------------------------------------------------

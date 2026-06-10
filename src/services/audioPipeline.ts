@@ -11,14 +11,37 @@ export interface AudioPipelineConfig {
 
 type SpeechRecognitionCtor = new () => SpeechRecognitionLike;
 
+interface SpeechRecognitionAlternativeLike {
+  transcript: string;
+}
+
+interface SpeechRecognitionResultLike {
+  isFinal: boolean;
+  [index: number]: SpeechRecognitionAlternativeLike;
+}
+
+interface SpeechRecognitionResultListLike {
+  length: number;
+  [index: number]: SpeechRecognitionResultLike;
+}
+
+interface SpeechRecognitionEventLike {
+  resultIndex: number;
+  results: SpeechRecognitionResultListLike;
+}
+
+interface SpeechRecognitionErrorEventLike {
+  error?: string;
+}
+
 interface SpeechRecognitionLike {
   lang: string;
   continuous: boolean;
   interimResults: boolean;
   maxAlternatives: number;
   onstart: (() => void) | null;
-  onresult: ((event: any) => void) | null;
-  onerror: ((event: any) => void) | null;
+  onresult: ((event: SpeechRecognitionEventLike) => void) | null;
+  onerror: ((event: SpeechRecognitionErrorEventLike) => void) | null;
   onend: (() => void) | null;
   start: () => void;
   stop: () => void;
@@ -116,7 +139,7 @@ export class AudioPipeline {
     recognition.interimResults = true; // surface words as they are recognised
     recognition.maxAlternatives = 1;
 
-    recognition.onresult = (event: any) => {
+    recognition.onresult = (event: SpeechRecognitionEventLike) => {
       let interim = '';
       for (let i = event.resultIndex; i < event.results.length; i += 1) {
         const result = event.results[i];
@@ -127,7 +150,7 @@ export class AudioPipeline {
       this.onTranscriptCallback(this.baseText + this.finalText + interim);
     };
 
-    recognition.onerror = (event: any) => {
+    recognition.onerror = (event: SpeechRecognitionErrorEventLike) => {
       const err: string | undefined = event?.error;
       if (err === 'no-speech' || err === 'aborted') return;
       if (err === 'not-allowed' || err === 'service-not-allowed') {

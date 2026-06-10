@@ -32,7 +32,20 @@ describe('translateTextOffline', () => {
   });
 
   it('returns source text with a local marker when no dictionary route exists', () => {
-    const result = translateTextOffline('specialized vocabulary', 'en', 'ja');
-    expect(result).toBe('[en -> ja offline draft] specialized vocabulary');
+    const result = translateTextOffline('specialized vocabulary', 'en', 'de');
+    expect(result).toBe('[en -> de offline draft] specialized vocabulary');
+  });
+
+  it('keeps Japanese translation as UTF-8 text for Japanese TTS', () => {
+    const result = translateTextOffline('hello thank you goodbye upload document', 'en', 'ja');
+    expect(result).toContain('こんにちは');
+    expect(result).toContain('ありがとう');
+    expect(result).toContain('アップロード');
+    expect(result).toContain('文書');
+  });
+
+  it('translates Japanese source phrases without requiring word boundaries', () => {
+    const result = translateTextOffline('こんにちはありがとう文書', 'ja', 'en');
+    expect(result).toBe('hellothank youdocument');
   });
 });

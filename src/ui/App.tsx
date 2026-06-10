@@ -38,6 +38,7 @@ import {
 } from '../services/defaultConfig';
 import { SecretaryStorage } from '../services/storage';
 import { SyncManager } from '../services/sync';
+import { speakTextWithLocale } from '../services/speech';
 import { polishTranscript, translateText, translateTextOffline } from '../services/textProcessing';
 import { isGemmaReady, isGemmaSupported, polishWithGemma, translateWithGemma } from '../services/gemmaEngine';
 
@@ -419,19 +420,30 @@ export function App(): JSX.Element {
       flash('Nothing to read yet');
       return;
     }
+    const speechLanguage = translatedText ? targetLang : sourceLang;
+    const needsLocaleVoice = speechLanguage === 'ja' || /[\u3040-\u30ff\u3400-\u4dbf\u4e00-\u9fff]/u.test(text);
     try {
-      flash('Loading natural voice…');
-      const wavUrl = await synthesizeWithPiper(text);
-      window.speechSynthesis.cancel();
-      const audio = new Audio(wavUrl);
-      audio.onended = () => URL.revokeObjectURL(wavUrl);
-      await audio.play();
-      flash('Reading aloud');
+      if (!needsLocaleVoice) {
+        flash('Loading natural voice...');
+        const wavUrl = await synthesizeWithPiper(text);
+        window.speechSynthesis.cancel();
+        const audio = new Audio(wavUrl);
+        audio.onended = () => URL.revokeObjectURL(wavUrl);
+        await audio.play();
+        flash('Reading aloud');
+        return;
+      }
     } catch {
-      // Piper could not load (offline or first-run download blocked) — fall back.
-      speakText(text);
       flash('Using basic voice (natural voice unavailable)');
     }
+
+    const result = await speakTextWithLocale(text, speechLanguage);
+    if (result.warning) {
+      setWarnings((current) => [...current.slice(-2), result.warning as string]);
+      flash(result.warning);
+      return;
+    }
+    flash('Reading aloud');
   }
 
   function applyGlossary(text: string): string {
@@ -887,21 +899,18 @@ function friendlyStatus(state: ModelState, online: boolean, recording: boolean):
   if (state === 'processing-local-polish' || state === 'sync-pending') return 'Polishing...';
   return 'Ready';
 }
-
-function speakText(text: string): void {
-  if (!text.trim() || !('speechSynthesis' in window)) return;
-  window.speechSynthesis.cancel();
-  window.speechSynthesis.speak(new SpeechSynthesisUtterance(text));
-}
-
 // Piper TTS (VITS) loaded from CDN at runtime — kept out of the bundle so the
 // build stays lean. The voice model is downloaded once and cached by the lib.
-let piperModule: any = null;
+interface PiperModule {
+  predict: (options: { text: string; voiceId: string }) => Promise<Blob>;
+}
+
+let piperModule: PiperModule | null = null;
 
 async function synthesizeWithPiper(text: string): Promise<string> {
   if (!piperModule) {
     const moduleUrl = 'https://cdn.jsdelivr.net/npm/@diffusionstudio/vits-web@1.0.3/+esm';
-    piperModule = await import(/* @vite-ignore */ moduleUrl);
+    piperModule = (await import(/* @vite-ignore */ moduleUrl)) as PiperModule;
   }
   const wav: Blob = await piperModule.predict({ text, voiceId: 'en_US-amy-medium' });
   return URL.createObjectURL(wav);

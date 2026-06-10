@@ -31,8 +31,49 @@ const LANGUAGE_NAMES: Record<string, string> = {
 };
 
 let modelBytesPromise: Promise<Uint8Array> | null = null;
-let enginePromise: Promise<any> | null = null;
+let enginePromise: Promise<LlmEngine> | null = null;
 let engineReady = false;
+
+interface OpfsWritable {
+  write: (data: Uint8Array) => Promise<void>;
+  close: () => Promise<void>;
+}
+
+interface OpfsFileHandle {
+  getFile: () => Promise<File>;
+  createWritable: () => Promise<OpfsWritable>;
+}
+
+interface OpfsDirectoryHandle {
+  getFileHandle: (name: string, options?: { create?: boolean }) => Promise<OpfsFileHandle>;
+}
+
+interface OpfsStorageAccessor {
+  getDirectory?: () => Promise<OpfsDirectoryHandle>;
+}
+
+interface LlmEngine {
+  generateResponse(prompt: string): string | Promise<string>;
+  generateResponse(prompt: string, onPartial: (partial: string, done: boolean) => void): void;
+}
+
+interface MediapipeGenAiModule {
+  FilesetResolver: {
+    forGenAiTasks: (wasmPath: string) => Promise<unknown>;
+  };
+  LlmInference: {
+    createFromOptions: (
+      taskRunner: unknown,
+      options: {
+        baseOptions: { modelAssetBuffer: Uint8Array };
+        maxTokens: number;
+        topK: number;
+        temperature: number;
+        randomSeed: number;
+      }
+    ) => Promise<LlmEngine>;
+  };
+}
 
 export function isGemmaSupported(): boolean {
   return typeof navigator !== 'undefined' && 'gpu' in navigator;
@@ -45,10 +86,11 @@ export function isGemmaReady(): boolean {
 }
 
 // --- OPFS model cache --------------------------------------------------------
-async function getOpfsRoot(): Promise<any | null> {
+async function getOpfsRoot(): Promise<OpfsDirectoryHandle | null> {
   try {
-    if (!navigator.storage?.getDirectory) return null;
-    return await navigator.storage.getDirectory();
+    const storage = navigator.storage as unknown as OpfsStorageAccessor | undefined;
+    if (!storage?.getDirectory) return null;
+    return await storage.getDirectory();
   } catch {
     return null;
   }
@@ -72,7 +114,7 @@ async function writeModelToOpfs(bytes: Uint8Array): Promise<void> {
     const root = await getOpfsRoot();
     if (!root) return;
     const handle = await root.getFileHandle(OPFS_MODEL_NAME, { create: true });
-    const writable = (await handle.createWritable()) as { write: (d: Uint8Array) => Promise<void>; close: () => Promise<void> };
+    const writable = await handle.createWritable();
     for (let offset = 0; offset < bytes.length; offset += OPFS_WRITE_CHUNK) {
       await writable.write(bytes.subarray(offset, Math.min(offset + OPFS_WRITE_CHUNK, bytes.length)));
     }
@@ -137,11 +179,11 @@ function loadModelBytes(onProgress?: (message: string) => void): Promise<Uint8Ar
   return modelBytesPromise;
 }
 
-async function getEngine(onProgress?: (message: string) => void): Promise<any> {
+async function getEngine(onProgress?: (message: string) => void): Promise<LlmEngine> {
   if (enginePromise) return enginePromise;
   enginePromise = (async () => {
     onProgress?.('Loading Gemma 4 runtime…');
-    const mediapipe = await import(/* @vite-ignore */ MEDIAPIPE_ESM);
+    const mediapipe = (await import(/* @vite-ignore */ MEDIAPIPE_ESM)) as MediapipeGenAiModule;
     const genai = await mediapipe.FilesetResolver.forGenAiTasks(MEDIAPIPE_WASM);
     const modelBytes = await loadModelBytes(onProgress);
     const engine = await mediapipe.LlmInference.createFromOptions(genai, {
@@ -161,7 +203,7 @@ async function getEngine(onProgress?: (message: string) => void): Promise<any> {
   return enginePromise;
 }
 
-function generate(engine: any, prompt: string, onPartial?: (partial: string) => void): Promise<string> {
+function generate(engine: LlmEngine, prompt: string, onPartial?: (partial: string) => void): Promise<string> {
   if (typeof onPartial === 'function') {
     return new Promise<string>((resolve, reject) => {
       let full = '';

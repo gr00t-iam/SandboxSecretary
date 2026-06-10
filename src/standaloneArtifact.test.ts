@@ -76,4 +76,18 @@ describe('standalone Sandbox Secretary artifact', () => {
       'Reset Credentials'
     ].forEach((marker) => expect(html).toContain(marker));
   });
+
+  it('keeps Japanese translation and speech output locale-aware in the standalone artifact', () => {
+    [
+      "ja: 'Japanese'",
+      "'en:ja'",
+      "'ja:en'",
+      'こんにちは',
+      'speechLocaleFor',
+      'chooseSpeechVoice',
+      'ja-JP',
+      ".normalize('NFC')",
+      'No local Japanese voice is installed'
+    ].forEach((marker) => expect(html).toContain(marker));
+  });
 });

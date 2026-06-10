@@ -22,13 +22,37 @@ interface GisTokenResponse {
   error_description?: string;
 }
 
+interface GisTokenClient {
+  requestAccessToken: (options: { prompt: '' | 'consent' }) => void;
+}
+
+interface GisTokenClientConfig {
+  client_id: string;
+  scope: string;
+  callback: (response: GisTokenResponse) => void;
+  error_callback: (error: { type?: string }) => void;
+}
+
+interface GoogleOAuth2Namespace {
+  initTokenClient: (config: GisTokenClientConfig) => GisTokenClient;
+}
+
+interface GoogleWindow {
+  google?: {
+    accounts?: {
+      oauth2?: GoogleOAuth2Namespace;
+    };
+  };
+}
+
 // Injects the GIS script once and resolves when its oauth2 namespace is ready.
-export function loadGoogleIdentityServices(timeoutMs = 8000): Promise<any> {
-  return new Promise<any>((resolve, reject) => {
-    const w = window as unknown as { google?: any };
-    const ready = (): any => w.google?.accounts?.oauth2;
-    if (ready()) {
-      resolve(ready());
+export function loadGoogleIdentityServices(timeoutMs = 8000): Promise<GoogleOAuth2Namespace> {
+  return new Promise<GoogleOAuth2Namespace>((resolve, reject) => {
+    const w = window as unknown as GoogleWindow;
+    const ready = (): GoogleOAuth2Namespace | undefined => w.google?.accounts?.oauth2;
+    const immediate = ready();
+    if (immediate) {
+      resolve(immediate);
       return;
     }
     if (!document.querySelector(`script[src="${GIS_SRC}"]`)) {
@@ -41,8 +65,9 @@ export function loadGoogleIdentityServices(timeoutMs = 8000): Promise<any> {
     }
     const start = Date.now();
     const poll = (): void => {
-      if (ready()) {
-        resolve(ready());
+      const oauth2 = ready();
+      if (oauth2) {
+        resolve(oauth2);
         return;
       }
       if (Date.now() - start > timeoutMs) {
@@ -59,12 +84,12 @@ export function loadGoogleIdentityServices(timeoutMs = 8000): Promise<any> {
   });
 }
 
-let cachedClient: any = null;
+let cachedClient: GisTokenClient | null = null;
 let cachedClientId = '';
 let pendingResolve: ((response: GisTokenResponse) => void) | null = null;
 let pendingReject: ((error: Error) => void) | null = null;
 
-async function getTokenClient(clientId: string, scope: string): Promise<any> {
+async function getTokenClient(clientId: string, scope: string): Promise<GisTokenClient> {
   const oauth2 = await loadGoogleIdentityServices();
   if (cachedClient && cachedClientId === clientId) return cachedClient;
   cachedClient = oauth2.initTokenClient({
