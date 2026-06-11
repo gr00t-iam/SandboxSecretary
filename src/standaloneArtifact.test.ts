@@ -33,7 +33,8 @@ describe('standalone Sandbox Secretary artifact', () => {
       'applyGlossary',
       'uploadGoogleDriveMultipart',
       'buildMailto',
-      'exportMarkdown',
+      'exportActiveToDrive',
+      'emailActiveText',
       'navigator.storage.persist',
       'visibilitychange',
       'pagehide',
@@ -48,7 +49,11 @@ describe('standalone Sandbox Secretary artifact', () => {
       'App Settings',
       'Your Words',
       'Polished Text',
+      'Translation',
+      'polishedTabBtn',
+      'translationTabBtn',
       'Polish Text',
+      'emailBtn',
       'Writing Style Preferences',
       'Word Auto-Correct Glossary',
       'Cloud Accounts & Export destinations',
@@ -90,5 +95,21 @@ describe('standalone Sandbox Secretary artifact', () => {
       ".normalize('NFC')",
       'No local '
     ].forEach((marker) => expect(html).toContain(marker));
+  });
+
+  it('keeps French full-string translation, French TTS, and Google Docs export in the standalone artifact', () => {
+    [
+      "'en:fr'",
+      "'fr:en'",
+      "next: 'ensuite'",
+      "upload: 'televerser'",
+      "fr: 'fr-FR'",
+      'application/vnd.google-apps.document',
+      'Content-Type: text/html; charset=UTF-8',
+      'activeOutputText'
+    ].forEach((marker) => expect(html).toContain(marker));
+
+    expect(html).not.toContain('text/markdown');
+    expect(html).not.toContain('exportMarkdown');
   });
 });

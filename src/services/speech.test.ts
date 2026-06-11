@@ -15,6 +15,10 @@ describe('speech locale selection', () => {
     expect(resolveSpeechLocale('de', 'Guten Morgen.')).toBe('de-DE');
   });
 
+  it('uses the French locale for French translation playback', () => {
+    expect(resolveSpeechLocale('fr', 'Bonjour, merci.')).toBe('fr-FR');
+  });
+
   it('prefers a local exact Japanese voice over a default voice', () => {
     const voice = chooseSpeechVoice(
       [

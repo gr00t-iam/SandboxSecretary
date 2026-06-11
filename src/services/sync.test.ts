@@ -71,5 +71,8 @@ describe('SyncManager', () => {
     expect(requestInit.headers).toMatchObject({
       Authorization: 'Bearer saved-token'
     });
+    expect(String(requestInit.body)).toContain('"mimeType":"application/vnd.google-apps.document"');
+    expect(String(requestInit.body)).toContain('Content-Type: text/html; charset=UTF-8');
+    expect(String(requestInit.body)).toContain('<pre>draft</pre>');
   });
 });

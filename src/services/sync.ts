@@ -147,10 +147,11 @@ async function uploadToDrive(
   }
 
   const metadata = {
-    name: `${document.title || document.id}.md`,
-    mimeType: 'text/markdown',
+    name: document.title || document.id,
+    mimeType: 'application/vnd.google-apps.document',
     parents: [folderId]
   };
+  const html = `<!doctype html><meta charset="utf-8"><pre>${escapeHtml(document.polished_text)}</pre>`;
   const boundary = `sandbox-secretary-${document.id}`;
   const body = [
     `--${boundary}`,
@@ -158,9 +159,9 @@ async function uploadToDrive(
     '',
     JSON.stringify(metadata),
     `--${boundary}`,
-    'Content-Type: text/markdown; charset=UTF-8',
+    'Content-Type: text/html; charset=UTF-8',
     '',
-    document.polished_text,
+    html,
     `--${boundary}--`
   ].join('\r\n');
 
@@ -176,4 +177,17 @@ async function uploadToDrive(
   if (!response.ok) {
     throw new Error(`Google Drive upload failed with ${response.status}.`);
   }
+}
+
+function escapeHtml(value: string): string {
+  return value.replace(/[&<>"']/g, (character) => {
+    const entities: Record<string, string> = {
+      '&': '&amp;',
+      '<': '&lt;',
+      '>': '&gt;',
+      '"': '&quot;',
+      "'": '&#39;'
+    };
+    return entities[character];
+  });
 }

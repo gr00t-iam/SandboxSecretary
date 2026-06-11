@@ -304,7 +304,8 @@ function buildTranslatePrompt(text: string, sourceLang: string, targetLang: stri
   const to = LANGUAGE_NAMES[targetLang] || targetLang;
   return [
     `Translate the text below from ${from} to ${to}.`,
-    'Preserve meaning and tone. Return ONLY the translation, with no notes, labels, or quotation marks.',
+    'Translate every word and every sentence in the full input. Do not stop after the first word or phrase.',
+    'Preserve meaning and tone. Return ONLY the complete translation, with no notes, labels, quotation marks, or omitted segments.',
     '',
     text
   ].join('\n');

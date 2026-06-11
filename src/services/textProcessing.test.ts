@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { polishTranscript, translateTextOffline } from './textProcessing';
+import { polishTranscript, translateText, translateTextOffline } from './textProcessing';
 
 describe('polishTranscript', () => {
   it('removes filler words and keeps original intent', () => {
@@ -47,5 +47,37 @@ describe('translateTextOffline', () => {
   it('translates Japanese source phrases without requiring word boundaries', () => {
     const result = translateTextOffline('こんにちはありがとう文書', 'ja', 'en');
     expect(result).toBe('hellothank youdocument');
+  });
+
+  it('translates full common dictated strings into French instead of only the first word', () => {
+    const result = translateTextOffline('hello thank you. next upload the document tomorrow', 'en', 'fr');
+    expect(result).toContain('bonjour');
+    expect(result).toContain('merci');
+    expect(result).toContain('ensuite');
+    expect(result).toContain('televerser');
+    expect(result).toContain('le document');
+    expect(result).toContain('demain');
+    expect(result).not.toMatch(/\bhello\b|\bthank you\b|\bnext\b|\bupload\b|\btomorrow\b/i);
+  });
+});
+
+describe('translateText', () => {
+  it('sends complete chunks and combines complete French responses', async () => {
+    const fetchImpl = async (url: string | URL | Request): Promise<Response> => {
+      const requestUrl = new URL(String(url));
+      const sourceText = requestUrl.searchParams.get('q') ?? '';
+      expect(sourceText).toContain('Hello team');
+      expect(sourceText).toContain('upload the document tomorrow');
+      return new Response(
+        JSON.stringify({
+          responseStatus: 200,
+          responseData: { translatedText: 'Bonjour equipe. Veuillez televerser le document demain.' }
+        }),
+        { status: 200, headers: { 'Content-Type': 'application/json' } }
+      );
+    };
+
+    const result = await translateText('Hello team. Please upload the document tomorrow.', 'en', 'fr', fetchImpl);
+    expect(result).toBe('Bonjour equipe. Veuillez televerser le document demain.');
   });
 });

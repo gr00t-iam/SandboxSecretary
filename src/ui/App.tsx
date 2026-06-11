@@ -53,6 +53,7 @@ const languageOptions = [
 ] as const;
 const waveformBars = Array.from({ length: 48 }, (_, index) => index);
 const defaultGlossaryTerms: GlossaryTerm[] = [{ key: 'k8s', value: 'Kubernetes' }];
+type OutputTab = 'polished' | 'translation';
 
 interface GlossaryTerm {
   key: string;
@@ -71,6 +72,7 @@ export function App(): JSX.Element {
   const [rawText, setRawText] = useState('');
   const [polishedText, setPolishedText] = useState('');
   const [translatedText, setTranslatedText] = useState('');
+  const [activeOutputTab, setActiveOutputTab] = useState<OutputTab>('polished');
 
   const [sourceLang, setSourceLang] = useState('en');
   const [targetLang, setTargetLang] = useState('es');
@@ -235,6 +237,7 @@ export function App(): JSX.Element {
     const heuristic = polishTranscript(preparedText, polishOptions);
     setTranslatedText('');
     setPolishedText(heuristic);
+    setActiveOutputTab('polished');
     try {
       if (!isGemmaReady()) {
         flash(isGemmaLoading() ? 'Polished locally while the AI model loads' : 'Polished locally');
@@ -247,6 +250,7 @@ export function App(): JSX.Element {
         (partial) => {
           setTranslatedText('');
           setPolishedText(partial);
+          setActiveOutputTab('polished');
         },
         (progress) => flash(progress)
       );
@@ -269,6 +273,7 @@ export function App(): JSX.Element {
     }
     if (sourceLang === targetLang) {
       setTranslatedText(preparedText);
+      setActiveOutputTab('translation');
       flash('Source and target are the same');
       return;
     }
@@ -279,10 +284,12 @@ export function App(): JSX.Element {
         flash('Translating with Gemma 4 E2B…');
         const translated = await translateWithGemma(preparedText, sourceLang, targetLang, (partial) => setTranslatedText(partial));
         setTranslatedText(translated);
+        setActiveOutputTab('translation');
         flash('Translated with Gemma 4 E2B');
       } else if (navigator.onLine) {
         const translated = await translateText(preparedText, sourceLang, targetLang);
         setTranslatedText(translated);
+        setActiveOutputTab('translation');
         flash('Translated');
       } else {
         throw new Error('offline');
@@ -290,6 +297,7 @@ export function App(): JSX.Element {
     } catch {
       // Offline or service hiccup — use the built-in dictionary as a fallback.
       setTranslatedText(translateTextOffline(preparedText, sourceLang, targetLang));
+      setActiveOutputTab('translation');
       flash('Translated offline (limited)');
     } finally {
       setState('system-ready');
@@ -307,10 +315,11 @@ export function App(): JSX.Element {
         ? { type: 'email', path_or_recipient: recipient.trim() || DEFAULT_EMAIL_RECIPIENT }
         : { type: 'gdrive', path_or_recipient: effectiveDrive.folderId, accessToken: effectiveDrive.accessToken };
 
-    const title = buildTitle(polishedText || rawText);
+    const activeText = getActiveOutputText();
+    const title = buildTitle(activeText || polishedText || rawText);
     const document = await storage.saveDocument({
       raw_transcript: rawText,
-      polished_text: translatedText || polishedText || rawText,
+      polished_text: activeText || translatedText || polishedText || rawText,
       source_lang: sourceLang,
       target_lang: targetLang,
       sync_status: 'pending',
@@ -410,34 +419,53 @@ export function App(): JSX.Element {
     window.setTimeout(() => setNotice((current) => (current === message ? '' : current)), 2600);
   }
 
-  // Export = download the polished/translated text as Markdown, then queue it.
   async function exportDocument(): Promise<void> {
-    const text = (translatedText || polishedText || rawText).trim();
+    const text = getActiveOutputText().trim();
     if (!text) {
-      flash('Nothing to export yet');
+      flash(`Nothing in ${activeOutputTab === 'translation' ? 'Translation' : 'Polished Text'} to export`);
       return;
     }
-    const blob = new Blob([text], { type: 'text/markdown;charset=utf-8' });
-    const url = URL.createObjectURL(blob);
-    const link = window.document.createElement('a');
-    link.href = url;
-    link.download = `${safeFileName(buildTitle(text))}.md`;
-    window.document.body.appendChild(link);
-    link.click();
-    link.remove();
-    window.setTimeout(() => URL.revokeObjectURL(url), 1000);
-    await saveCurrentDocument();
-    flash('Exported .md and saved');
+
+    try {
+      const credentials = await getFreshDriveCredentials();
+      await uploadGoogleDoc(text, buildTitle(text), credentials);
+      await storage.saveDocument({
+        raw_transcript: rawText,
+        polished_text: text,
+        source_lang: sourceLang,
+        target_lang: activeOutputTab === 'translation' ? targetLang : sourceLang,
+        sync_status: 'synced',
+        sync_destination: { type: 'gdrive', path_or_recipient: credentials.folderId, accessToken: credentials.accessToken },
+        title: buildTitle(text)
+      });
+      await refreshDocuments();
+      flash('Exported to Google Drive');
+    } catch (error) {
+      addWarning(error);
+      flash('Drive export needs Google authorization');
+    }
+  }
+
+  function emailActiveText(): void {
+    const text = getActiveOutputText().trim();
+    if (!text) {
+      flash(`Nothing in ${activeOutputTab === 'translation' ? 'Translation' : 'Polished Text'} to email`);
+      return;
+    }
+    const subject = encodeURIComponent(`Sandbox Secretary: ${buildTitle(text)}`);
+    const body = encodeURIComponent(`${text}\n\n---\nYour Words:\n${rawText}`);
+    window.location.href = `mailto:${encodeURIComponent(recipient.trim() || DEFAULT_EMAIL_RECIPIENT)}?subject=${subject}&body=${body}`;
+    flash('Email draft opened');
   }
 
   // Read Aloud with a natural Piper voice; falls back to the browser voice.
   async function readAloud(): Promise<void> {
-    const text = (translatedText || polishedText || rawText).trim();
+    const text = getActiveOutputText().trim();
     if (!text) {
       flash('Nothing to read yet');
       return;
     }
-    const speechLanguage = translatedText ? targetLang : sourceLang;
+    const speechLanguage = getActiveOutputLanguage();
     const needsLocaleVoice = speechLanguage !== 'en' || /[\u3040-\u30ff\u3400-\u4dbf\u4e00-\u9fff]/u.test(text);
     try {
       if (!needsLocaleVoice) {
@@ -470,9 +498,70 @@ export function App(): JSX.Element {
     }, text);
   }
 
-  const outputText = translatedText || polishedText;
+  function getActiveOutputText(): string {
+    return activeOutputTab === 'translation' ? translatedText : polishedText;
+  }
+
+  function getActiveOutputLanguage(): string {
+    return activeOutputTab === 'translation' && translatedText.trim() ? targetLang : sourceLang;
+  }
+
+  async function getFreshDriveCredentials(): Promise<DriveCredentials & { accessToken: string }> {
+    const stored = await storage.getConfig<DriveCredentials>('driveCredentials');
+    const saved = withDefaultDriveCredentials({
+      ...stored,
+      folderId: driveFolder || stored?.folderId,
+      clientId: driveClientId || stored?.clientId,
+      accessToken: driveAccessToken || stored?.accessToken
+    });
+    if (!saved.accessToken) {
+      throw new Error('Authorize Google Drive before exporting.');
+    }
+    if (saved.expiresAt && saved.expiresAt <= Date.now() + 60_000) {
+      const refreshed = await requestGoogleAccessToken(saved.clientId, GOOGLE_OAUTH_SCOPES, '');
+      const next = { ...saved, accessToken: refreshed.accessToken, expiresAt: refreshed.expiresAt };
+      await storage.putConfig('driveCredentials', next);
+      setDriveAccessToken(next.accessToken);
+      return next as DriveCredentials & { accessToken: string };
+    }
+    return saved as DriveCredentials & { accessToken: string };
+  }
+
+  async function uploadGoogleDoc(text: string, title: string, credentials: DriveCredentials & { accessToken: string }): Promise<void> {
+    const boundary = `sandbox-secretary-${crypto.randomUUID()}`;
+    const metadata = {
+      name: title,
+      mimeType: 'application/vnd.google-apps.document',
+      parents: [credentials.folderId]
+    };
+    const html = `<!doctype html><meta charset="utf-8"><pre>${escapeHtml(text)}</pre>`;
+    const body = [
+      `--${boundary}`,
+      'Content-Type: application/json; charset=UTF-8',
+      '',
+      JSON.stringify(metadata),
+      `--${boundary}`,
+      'Content-Type: text/html; charset=UTF-8',
+      '',
+      html,
+      `--${boundary}--`
+    ].join('\r\n');
+    const response = await fetch('https://www.googleapis.com/upload/drive/v3/files?uploadType=multipart&fields=id,webViewLink', {
+      method: 'POST',
+      headers: {
+        Authorization: `Bearer ${credentials.accessToken}`,
+        'Content-Type': `multipart/related; boundary=${boundary}`
+      },
+      body
+    });
+    if (!response.ok) {
+      throw new Error(`Google Docs export failed with ${response.status}.`);
+    }
+  }
+
   const wordCount = countWords(rawText);
-  const outputWordCount = countWords(outputText);
+  const polishedWordCount = countWords(polishedText);
+  const translatedWordCount = countWords(translatedText);
   const status = friendlyStatus(state, online, recording);
   const driveConnected = Boolean(driveAccessToken);
 
@@ -531,22 +620,47 @@ export function App(): JSX.Element {
               placeholder="Start speaking or type here..."
             />
           </label>
-          <label className="text-card output-card">
-            <span className="card-title">
-              Polished Text <Sparkles size={16} /> <small>{outputWordCount} words</small>
-            </span>
-            <textarea
-              value={outputText}
-              onChange={(event) => {
-                setTranslatedText('');
-                setPolishedText(event.target.value);
-              }}
-              placeholder="Your polished text will appear here."
-            />
+          <section className="text-card output-card" aria-label="Output workspace">
+            <div className="output-tabs" role="tablist" aria-label="Output type">
+              <button
+                className={activeOutputTab === 'polished' ? 'active' : ''}
+                type="button"
+                role="tab"
+                aria-selected={activeOutputTab === 'polished'}
+                onClick={() => setActiveOutputTab('polished')}
+              >
+                <Sparkles size={16} /> Polished Text <small>{polishedWordCount} words</small>
+              </button>
+              <button
+                className={activeOutputTab === 'translation' ? 'active' : ''}
+                type="button"
+                role="tab"
+                aria-selected={activeOutputTab === 'translation'}
+                onClick={() => setActiveOutputTab('translation')}
+              >
+                <Globe2 size={16} /> Translation <small>{translatedWordCount} words</small>
+              </button>
+            </div>
+            <label className={activeOutputTab === 'polished' ? 'output-panel active' : 'output-panel'}>
+              <span className="sr-only">Polished Text</span>
+              <textarea
+                value={polishedText}
+                onChange={(event) => setPolishedText(event.target.value)}
+                placeholder="Your polished text will appear here."
+              />
+            </label>
+            <label className={activeOutputTab === 'translation' ? 'output-panel active' : 'output-panel'}>
+              <span className="sr-only">Translation</span>
+              <textarea
+                value={translatedText}
+                onChange={(event) => setTranslatedText(event.target.value)}
+                placeholder="Your translation will appear here."
+              />
+            </label>
             <button className="listen-button" type="button" onClick={() => readAloud()}>
               <Volume2 size={18} /> Read Aloud
             </button>
-          </label>
+          </section>
         </section>
 
         <section className="language-row" aria-label="Language selection">
@@ -564,6 +678,9 @@ export function App(): JSX.Element {
           </button>
           <button className="export-action" type="button" onClick={exportDocument}>
             <UploadCloud size={18} /> Export
+          </button>
+          <button className="email-action" type="button" onClick={emailActiveText}>
+            <Mail size={18} /> Email
           </button>
         </nav>
       </section>
@@ -929,12 +1046,15 @@ async function synthesizeWithPiper(text: string): Promise<string> {
   return URL.createObjectURL(wav);
 }
 
-function safeFileName(value: string): string {
-  return (
-    value
-      .toLowerCase()
-      .replace(/[^a-z0-9]+/g, '-')
-      .replace(/^-+|-+$/g, '')
-      .slice(0, 64) || 'sandbox-secretary-note'
-  );
+function escapeHtml(value: string): string {
+  return value.replace(/[&<>"']/g, (char) => {
+    const entities: Record<string, string> = {
+      '&': '&amp;',
+      '<': '&lt;',
+      '>': '&gt;',
+      '"': '&quot;',
+      "'": '&#39;'
+    };
+    return entities[char];
+  });
 }
