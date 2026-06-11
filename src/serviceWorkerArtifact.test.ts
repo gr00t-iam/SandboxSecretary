@@ -35,6 +35,9 @@ describe('service worker artifact', () => {
     );
     ['.tflite', '.task', '.bin', '.safetensors', '.wasm'].forEach((extension) => expect(sw).toContain(extension));
     expect(sw).toContain('Range');
+    expect(sw).toContain('fullRequest');
+    expect(sw).toContain('cache.put(fullRequest');
+    expect(sw).toContain('cdn.jsdelivr.net');
     expect(sw).toContain('206');
   });
 

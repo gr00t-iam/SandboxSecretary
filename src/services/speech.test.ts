@@ -10,6 +10,11 @@ describe('speech locale selection', () => {
     expect(resolveSpeechLocale('en', '明日の会議')).toBe('ja-JP');
   });
 
+  it('uses Spanish and German locales for local speech playback', () => {
+    expect(resolveSpeechLocale('es', 'Hola, gracias.')).toBe('es-ES');
+    expect(resolveSpeechLocale('de', 'Guten Morgen.')).toBe('de-DE');
+  });
+
   it('prefers a local exact Japanese voice over a default voice', () => {
     const voice = chooseSpeechVoice(
       [

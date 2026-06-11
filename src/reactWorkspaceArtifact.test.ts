@@ -23,6 +23,10 @@ describe('React workspace artifact', () => {
     expect(app).not.toContain('State machine');
     expect(app).not.toContain('WASM/WebGPU worker');
     expect(app).not.toContain('Local-first dictation desk');
+    expect(app).not.toContain(['Web', 'DAV'].join(''));
+    expect(app).not.toContain(`Email (${['mail', 'to'].join('')}:)`);
+    expect(app).toContain('<span>Email</span>');
+    expect(styles).toContain('.destination-status.email-status');
   });
 
   it('uses the warm iOS-style shell instead of the old three-column dashboard', () => {

@@ -6,6 +6,14 @@ const languageLocales: Record<string, string> = {
   ja: 'ja-JP'
 };
 
+const localeNames: Record<string, string> = {
+  de: 'German',
+  en: 'English',
+  es: 'Spanish',
+  fr: 'French',
+  ja: 'Japanese'
+};
+
 export interface SpeechResult {
   spoken: boolean;
   warning?: string;
@@ -53,10 +61,11 @@ export async function speakTextWithLocale(text: string, language: string): Promi
   window.speechSynthesis.cancel();
   window.speechSynthesis.speak(utterance);
 
-  if (!voice && locale.toLowerCase().startsWith('ja')) {
+  if (!voice && locale !== 'en-US') {
+    const language = locale.toLowerCase().split('-')[0];
     return {
       spoken: true,
-      warning: 'No local Japanese voice is installed. The browser default voice was used with ja-JP.'
+      warning: `No local ${localeNames[language] ?? locale} voice is installed. The browser default voice was used with ${locale}.`
     };
   }
   return { spoken: true };

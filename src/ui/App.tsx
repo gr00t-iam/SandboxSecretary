@@ -40,7 +40,7 @@ import { SecretaryStorage } from '../services/storage';
 import { SyncManager } from '../services/sync';
 import { speakTextWithLocale } from '../services/speech';
 import { polishTranscript, translateText, translateTextOffline } from '../services/textProcessing';
-import { isGemmaReady, isGemmaSupported, polishWithGemma, translateWithGemma } from '../services/gemmaEngine';
+import { isGemmaLoading, isGemmaReady, isGemmaSupported, polishWithGemma, translateWithGemma, warmGemmaEngine } from '../services/gemmaEngine';
 
 const storage = new SecretaryStorage();
 const defaultMetrics: CacheMetrics = { documents: 0, pending: 0, failed: 0, synced: 0 };
@@ -91,6 +91,7 @@ export function App(): JSX.Element {
 
   const aiClient = useRef<AiWorkerClient>();
   const audioController = useRef<AudioPipeline>();
+  const rawTextRef = useRef(rawText);
   const syncManager = useMemo(
     () =>
       new SyncManager(storage, {
@@ -102,6 +103,10 @@ export function App(): JSX.Element {
       }),
     []
   );
+
+  useEffect(() => {
+    rawTextRef.current = rawText;
+  }, [rawText]);
 
   useEffect(() => {
     aiClient.current = new AiWorkerClient(
@@ -119,8 +124,19 @@ export function App(): JSX.Element {
     refreshDocuments();
     loadExportConfiguration().catch((error) => addWarning(error));
     loadGlossaryTerms().catch((error) => addWarning(error));
+    const gemmaWarmupTimer = window.setTimeout(() => {
+      if (!navigator.onLine || !isGemmaSupported()) return;
+      warmGemmaEngine((progress) => {
+        if (progress.includes('cached') || progress.includes('Loading Gemma 4 runtime')) {
+          flash(progress);
+        }
+      })
+        .then(() => flash('Local AI model ready'))
+        .catch((error) => addWarning(`Local AI model unavailable: ${error instanceof Error ? error.message : String(error)}`));
+    }, 1200);
 
     return () => {
+      window.clearTimeout(gemmaWarmupTimer);
       unsubscribe();
       aiClient.current?.dispose();
     };
@@ -203,7 +219,7 @@ export function App(): JSX.Element {
       setState('processing-local-polish');
       setWarnings((current) => [...current.slice(-2), 'Audio captured locally.']);
 
-      await runPolish(rawText);
+      await runPolish(rawTextRef.current);
     } catch (error) {
       addWarning(`Stop Recording Error: ${error instanceof Error ? error.message : String(error)}`);
     }
@@ -217,9 +233,12 @@ export function App(): JSX.Element {
     }
     setState('processing-local-polish');
     const heuristic = polishTranscript(preparedText, polishOptions);
+    setTranslatedText('');
+    setPolishedText(heuristic);
     try {
-      if (!isGemmaSupported()) {
-        throw new Error('WebGPU unavailable');
+      if (!isGemmaReady()) {
+        flash(isGemmaLoading() ? 'Polished locally while the AI model loads' : 'Polished locally');
+        return;
       }
       flash('Polishing with Gemma 4 E2B…');
       const polished = await polishWithGemma(
@@ -231,14 +250,12 @@ export function App(): JSX.Element {
         },
         (progress) => flash(progress)
       );
-      setTranslatedText('');
       setPolishedText(polished || heuristic);
       flash('Polished with Gemma 4 E2B');
     } catch {
-      // Gemma needs WebGPU + a large one-time download; fall back instantly.
-      setTranslatedText('');
+      // Keep the immediate local result when Gemma is unavailable.
       setPolishedText(heuristic);
-      flash(isGemmaSupported() ? 'Polished (Gemma unavailable — used quick polish)' : 'Polished (no WebGPU — used quick polish)');
+      flash('Polished locally');
     } finally {
       setState('system-ready');
     }
@@ -421,7 +438,7 @@ export function App(): JSX.Element {
       return;
     }
     const speechLanguage = translatedText ? targetLang : sourceLang;
-    const needsLocaleVoice = speechLanguage === 'ja' || /[\u3040-\u30ff\u3400-\u4dbf\u4e00-\u9fff]/u.test(text);
+    const needsLocaleVoice = speechLanguage !== 'en' || /[\u3040-\u30ff\u3400-\u4dbf\u4e00-\u9fff]/u.test(text);
     try {
       if (!needsLocaleVoice) {
         flash('Loading natural voice...');
@@ -612,7 +629,7 @@ function HelpView({ onClose }: { onClose: () => void }): JSX.Element {
         <HelpItem icon={<ShieldCheck size={28} />} title="100% Private" text="Everything stays on your device." />
         <HelpItem icon={<Leaf size={28} />} title="Works Offline" text="No internet? No problem." />
         <HelpItem icon={<Sparkles size={28} />} title="Instant Results" text="Real-time dictation, polish & translate." />
-        <HelpItem icon={<Cloud size={28} />} title="Export Anywhere" text="Email, Drive, WebDAV or local file." />
+        <HelpItem icon={<Cloud size={28} />} title="Export Anywhere" text="Email, Drive or local file." />
       </div>
     </aside>
   );
@@ -719,7 +736,7 @@ function SettingsView(props: SettingsViewProps): JSX.Element | null {
         defaultOpen
         icon={<FolderUp size={26} />}
         title="Cloud Accounts & Export destinations"
-        subtitle="Email, Drive, WebDAV & more"
+        subtitle="Email, Drive & local files"
       >
         <div className="saved-banner">
           <CheckCircle2 size={18} />
@@ -768,12 +785,8 @@ function SettingsView(props: SettingsViewProps): JSX.Element | null {
             </button>
           </div>
         </div>
-        <div className="destination-status">
-          <span>WebDAV</span>
-          <small>Not configured</small>
-        </div>
-        <div className="destination-status">
-          <span>Email (mailto:)</span>
+        <div className="destination-status email-status">
+          <span>Email</span>
           <small>Ready</small>
         </div>
       </Accordion>

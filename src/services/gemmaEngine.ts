@@ -12,6 +12,7 @@ const MEDIAPIPE_ESM = 'https://esm.sh/@mediapipe/tasks-genai@0.10.27';
 const MEDIAPIPE_WASM = 'https://cdn.jsdelivr.net/npm/@mediapipe/tasks-genai@0.10.27/wasm';
 const GEMMA4_E2B_WEB_TASK =
   'https://huggingface.co/litert-community/gemma-4-E2B-it-litert-lm/resolve/main/gemma-4-E2B-it-web.task?download=true';
+const GEMMA_BROWSER_CACHE = 'sandbox-secretary-gemma-model-v1';
 const OPFS_MODEL_NAME = 'gemma-4-E2B-it-web.task';
 const MIN_VALID_MODEL_BYTES = 100 * 1024 * 1024; // guard against truncated cache
 const OPFS_WRITE_CHUNK = 8 * 1024 * 1024; // 8 MB writes are far more reliable than one 2 GB blob
@@ -85,6 +86,14 @@ export function isGemmaReady(): boolean {
   return engineReady;
 }
 
+export function isGemmaLoading(): boolean {
+  return Boolean(enginePromise) && !engineReady;
+}
+
+export function warmGemmaEngine(onProgress?: (message: string) => void): Promise<void> {
+  return getEngine(onProgress).then(() => undefined);
+}
+
 // --- OPFS model cache --------------------------------------------------------
 async function getOpfsRoot(): Promise<OpfsDirectoryHandle | null> {
   try {
@@ -109,6 +118,19 @@ async function readModelFromOpfs(): Promise<Uint8Array | null> {
   }
 }
 
+async function readModelFromBrowserCache(): Promise<Uint8Array | null> {
+  try {
+    if (!('caches' in globalThis)) return null;
+    const cache = await caches.open(GEMMA_BROWSER_CACHE);
+    const response = await cache.match(GEMMA4_E2B_WEB_TASK);
+    if (!response || !response.ok) return null;
+    const bytes = new Uint8Array(await response.arrayBuffer());
+    return bytes.byteLength >= MIN_VALID_MODEL_BYTES ? bytes : null;
+  } catch {
+    return null;
+  }
+}
+
 async function writeModelToOpfs(bytes: Uint8Array): Promise<void> {
   try {
     const root = await getOpfsRoot();
@@ -130,6 +152,7 @@ async function downloadModel(onProgress?: (message: string) => void): Promise<Ui
     throw new Error(`Gemma model download failed (HTTP ${response.status}).`);
   }
   const total = Number(response.headers.get('Content-Length') || 0);
+  cacheModelResponse(response.clone()).catch(() => undefined);
   const reader = response.body.getReader();
   const chunks: Uint8Array[] = [];
   let received = 0;
@@ -151,6 +174,12 @@ async function downloadModel(onProgress?: (message: string) => void): Promise<Ui
   return bytes;
 }
 
+async function cacheModelResponse(response: Response): Promise<void> {
+  if (!('caches' in globalThis) || !response.ok) return;
+  const cache = await caches.open(GEMMA_BROWSER_CACHE);
+  await cache.put(GEMMA4_E2B_WEB_TASK, response);
+}
+
 // Resolves the model bytes from OPFS, or downloads + caches them. Cached as its
 // own promise so engine-init failures never cause a re-download.
 function loadModelBytes(onProgress?: (message: string) => void): Promise<Uint8Array> {
@@ -166,6 +195,12 @@ function loadModelBytes(onProgress?: (message: string) => void): Promise<Uint8Ar
     if (cached) {
       onProgress?.('Loading cached Gemma 4 model…');
       return cached;
+    }
+    const browserCached = await readModelFromBrowserCache();
+    if (browserCached) {
+      onProgress?.('Loading browser-cached Gemma 4 model…');
+      await writeModelToOpfs(browserCached);
+      return browserCached;
     }
     onProgress?.('Downloading Gemma 4 E2B (~2 GB, first run only)…');
     const bytes = await downloadModel(onProgress);

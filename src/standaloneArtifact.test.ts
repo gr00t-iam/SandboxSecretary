@@ -32,7 +32,6 @@ describe('standalone Sandbox Secretary artifact', () => {
       'createWorkerBlob',
       'applyGlossary',
       'uploadGoogleDriveMultipart',
-      'uploadWebDav',
       'buildMailto',
       'exportMarkdown',
       'navigator.storage.persist',
@@ -58,6 +57,8 @@ describe('standalone Sandbox Secretary artifact', () => {
 
     expect(html).not.toContain('State machine');
     expect(html).not.toContain('Execution log</div>');
+    expect(html).not.toContain(['Web', 'DAV'].join(''));
+    expect(html).not.toContain(['web', 'dav'].join(''));
   });
 
   it('persists Drive credentials as a one-time configuration with reset support', () => {
@@ -87,7 +88,7 @@ describe('standalone Sandbox Secretary artifact', () => {
       'chooseSpeechVoice',
       'ja-JP',
       ".normalize('NFC')",
-      'No local Japanese voice is installed'
+      'No local '
     ].forEach((marker) => expect(html).toContain(marker));
   });
 });

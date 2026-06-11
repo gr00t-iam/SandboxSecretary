@@ -1,4 +1,4 @@
-const VERSION = 'v8';
+const VERSION = 'v9';
 const STATIC_CACHE = `sandbox-secretary-static-${VERSION}`;
 const RUNTIME_CACHE = `sandbox-secretary-runtime-${VERSION}`;
 const MODEL_CACHE = `sandbox-secretary-models-${VERSION}`;
@@ -38,7 +38,15 @@ const STATIC_EXTENSIONS = [
   '.worklet.js'
 ];
 const MODEL_EXTENSIONS = ['.tflite', '.task', '.bin', '.safetensors', '.onnx', '.gguf', '.model', '.weights', '.wasm'];
-const MODEL_HOSTS = ['huggingface.co', 'cdn-lfs.huggingface.co', 'storage.googleapis.com', 'kaggle.com', 'www.kaggle.com'];
+const MODEL_HOSTS = [
+  'huggingface.co',
+  'cdn-lfs.huggingface.co',
+  'storage.googleapis.com',
+  'kaggle.com',
+  'www.kaggle.com',
+  'cdn.jsdelivr.net',
+  'esm.sh'
+];
 
 self.addEventListener('install', (event) => {
   event.waitUntil(
@@ -145,11 +153,16 @@ async function modelResponse(request) {
   const range = request.headers.get('Range');
 
   if (range) {
-    const cached = await cache.match(stripRangeHeader(request));
+    const fullRequest = stripRangeHeader(request);
+    const cached = await cache.match(fullRequest);
     if (cached) {
       return rangeResponse(cached, range);
     }
-    return fetch(request);
+    const response = await fetch(fullRequest);
+    if (isCacheableResponse(response)) {
+      cache.put(fullRequest, response.clone()).catch(() => undefined);
+    }
+    return rangeResponse(response, range);
   }
 
   const cached = await cache.match(request);

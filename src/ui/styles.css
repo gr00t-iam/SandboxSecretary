@@ -583,6 +583,22 @@ select:focus {
   padding: 0.65rem 0.8rem;
 }
 
+.destination-status.email-status {
+  display: grid;
+  grid-template-columns: 1fr auto 1fr;
+}
+
+.destination-status.email-status span {
+  grid-column: 2;
+  justify-self: center;
+  text-align: center;
+}
+
+.destination-status.email-status small {
+  grid-column: 3;
+  justify-self: end;
+}
+
 .glossary-list,
 .history-list,
 .diagnostic-list {
