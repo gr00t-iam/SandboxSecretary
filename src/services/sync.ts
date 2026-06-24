@@ -5,7 +5,7 @@ import { GMAIL_SEND_ENDPOINT } from './oauth';
 
 interface SyncDependencies {
   isOnline: () => boolean;
-  openMailto: (href: string) => void;
+  openGmailCompose: (href: string) => void;
   getDriveCredentials?: () => Promise<DriveCredentials | undefined>;
   fetch?: typeof fetch;
 }
@@ -59,7 +59,7 @@ export class SyncManager {
   }
 
   // Sends the note via the Gmail API when Google is authorized (a real send with
-  // no mail client); otherwise hands off to the system mailto: handler.
+  // no mail client); otherwise opens Gmail compose in a new browser tab.
   private async sendEmail(document: SecretaryDocument): Promise<void> {
     const recipient = document.sync_destination.type === 'email' ? document.sync_destination.path_or_recipient : '';
     const credentials = await this.dependencies.getDriveCredentials?.();
@@ -69,18 +69,24 @@ export class SyncManager {
         await sendGmailMessage(document, recipient, token, this.fetchImpl);
         return;
       } catch {
-        // Gmail failed (token, scope, or network) — fall back to mailto below.
+        // Gmail API failed (token, scope, or network) — fall back to browser compose below.
       }
     }
-    this.dependencies.openMailto(buildMailtoHref(document));
+    this.dependencies.openGmailCompose(buildGmailComposeHref(document));
   }
 }
 
-export function buildMailtoHref(document: SecretaryDocument): string {
-  const recipient = encodeURIComponent(document.sync_destination.path_or_recipient);
-  const subject = encodeURIComponent(`Sandbox Secretary: ${document.title}`);
-  const body = encodeURIComponent(`${document.polished_text}\n\n---\nRaw transcript:\n${document.raw_transcript}`);
-  return `mailto:${recipient}?subject=${subject}&body=${body}`;
+export function buildGmailComposeHref(document: SecretaryDocument): string {
+  const recipient =
+    document.sync_destination.type === 'email' ? document.sync_destination.path_or_recipient : '';
+  const params = new URLSearchParams({
+    view: 'cm',
+    fs: '1',
+    to: recipient,
+    su: `Sandbox Secretary: ${document.title}`,
+    body: `${document.polished_text}\n\n---\nRaw transcript:\n${document.raw_transcript}`
+  });
+  return `https://mail.google.com/mail/?${params.toString().replace(/\+/g, '%20')}`;
 }
 
 async function sendGmailMessage(

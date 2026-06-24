@@ -37,7 +37,7 @@ import {
   withDefaultDriveCredentials
 } from '../services/defaultConfig';
 import { SecretaryStorage } from '../services/storage';
-import { SyncManager } from '../services/sync';
+import { buildGmailComposeHref, SyncManager } from '../services/sync';
 import { speakTextWithLocale } from '../services/speech';
 import { polishTranscript, translateText, translateTextOffline } from '../services/textProcessing';
 import { isGemmaLoading, isGemmaReady, isGemmaSupported, polishWithGemma, translateWithGemma, warmGemmaEngine } from '../services/gemmaEngine';
@@ -98,8 +98,8 @@ export function App(): JSX.Element {
     () =>
       new SyncManager(storage, {
         isOnline: () => navigator.onLine,
-        openMailto: (href) => {
-          window.location.href = href;
+        openGmailCompose: (href) => {
+          window.open(href, '_blank');
         },
         getDriveCredentials: async () => storage.getConfig<DriveCredentials>('driveCredentials')
       }),
@@ -452,9 +452,18 @@ export function App(): JSX.Element {
       flash(`Nothing in ${activeOutputTab === 'translation' ? 'Translation' : 'Polished Text'} to email`);
       return;
     }
-    const subject = encodeURIComponent(`Sandbox Secretary: ${buildTitle(text)}`);
-    const body = encodeURIComponent(`${text}\n\n---\nYour Words:\n${rawText}`);
-    window.location.href = `mailto:${encodeURIComponent(recipient.trim() || DEFAULT_EMAIL_RECIPIENT)}?subject=${subject}&body=${body}`;
+    const gmailUrl = buildGmailComposeHref({
+      id: crypto.randomUUID(),
+      raw_transcript: rawText,
+      polished_text: text,
+      source_lang: sourceLang,
+      target_lang: getActiveOutputLanguage(),
+      sync_status: 'pending',
+      sync_destination: { type: 'email', path_or_recipient: recipient.trim() || DEFAULT_EMAIL_RECIPIENT },
+      timestamp: new Date().toISOString(),
+      title: buildTitle(text)
+    });
+    window.open(gmailUrl, '_blank');
     flash('Email draft opened');
   }
 

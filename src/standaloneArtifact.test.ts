@@ -32,7 +32,7 @@ describe('standalone Sandbox Secretary artifact', () => {
       'createWorkerBlob',
       'applyGlossary',
       'uploadGoogleDriveMultipart',
-      'buildMailto',
+      'buildGmailComposeUrl',
       'exportActiveToDrive',
       'emailActiveText',
       'navigator.storage.persist',
@@ -111,5 +111,16 @@ describe('standalone Sandbox Secretary artifact', () => {
 
     expect(html).not.toContain('text/markdown');
     expect(html).not.toContain('exportMarkdown');
+  });
+
+  it('opens Gmail compose in a new browser tab instead of navigating the PWA with mailto', () => {
+    [
+      'https://mail.google.com/mail/?view=cm&fs=1',
+      "window.open(gmailUrl, '_blank')",
+      'encodeURIComponent'
+    ].forEach((marker) => expect(html).toContain(marker));
+
+    expect(html).not.toContain('mailto:');
+    expect(html).not.toContain('window.location.href');
   });
 });

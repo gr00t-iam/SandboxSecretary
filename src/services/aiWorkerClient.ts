@@ -2,6 +2,11 @@ import type { PolishOptions, TranscriptSegment } from '../types';
 
 type PendingResolver = (value: string | TranscriptSegment) => void;
 
+let sharedWorker: Worker | null = null;
+let sharedWorkerReady = false;
+let sharedWorkerInitialized = false;
+const activeClients = new Set<AiWorkerClient>();
+
 export class AiWorkerClient {
   private readonly worker: Worker;
   private readonly pending = new Map<string, PendingResolver>();
@@ -11,31 +16,28 @@ export class AiWorkerClient {
     onStatus: (status: string) => void,
     onWarning: (warning: string) => void
   ) {
-    this.worker = new Worker(new URL('../workers/ai.worker.ts', import.meta.url), { type: 'module' });
-    this.worker.onmessage = (event) => {
-      const message = event.data;
-      if (message.type === 'ready') {
-        this.ready = true;
-        onStatus('system-ready');
-      }
-      if (message.type === 'resource-warning') {
-        onWarning(message.message);
-      }
-      if (message.type === 'model-progress') {
-        onStatus('model-initializing');
-      }
-      if (message.type === 'error') {
-        onWarning(message.message);
-      }
-      if (message.type === 'transcript' || message.type === 'polished' || message.type === 'translated') {
-        const resolver = this.pending.get(message.id);
-        this.pending.delete(message.id);
-        resolver?.(message.segment ?? message.text ?? '');
-      }
-    };
+    this.onStatus = onStatus;
+    this.onWarning = onWarning;
+    this.worker = getSharedWorker();
+    activeClients.add(this);
+    if (sharedWorkerReady) {
+      this.ready = true;
+      this.onStatus('system-ready');
+    }
   }
 
+  private readonly onStatus: (status: string) => void;
+  private readonly onWarning: (warning: string) => void;
+
   initialize(): void {
+    if (sharedWorkerInitialized) {
+      if (sharedWorkerReady) {
+        this.ready = true;
+        this.onStatus('system-ready');
+      }
+      return;
+    }
+    sharedWorkerInitialized = true;
     this.worker.postMessage({
       type: 'initialize',
       sttModel: 'Xenova/whisper-tiny.en',
@@ -75,7 +77,49 @@ export class AiWorkerClient {
   }
 
   dispose(): void {
-    this.worker.terminate();
+    activeClients.delete(this);
     this.pending.clear();
   }
+
+  handleMessage(message: {
+    type: string;
+    id?: string;
+    message?: string;
+    segment?: TranscriptSegment;
+    text?: string;
+  }): void {
+    if (message.type === 'ready') {
+      this.ready = true;
+      this.onStatus('system-ready');
+    }
+    if (message.type === 'resource-warning' && message.message) {
+      this.onWarning(message.message);
+    }
+    if (message.type === 'model-progress') {
+      this.onStatus('model-initializing');
+    }
+    if (message.type === 'error' && message.message) {
+      this.onWarning(message.message);
+    }
+    if ((message.type === 'transcript' || message.type === 'polished' || message.type === 'translated') && message.id) {
+      const resolver = this.pending.get(message.id);
+      this.pending.delete(message.id);
+      resolver?.(message.segment ?? message.text ?? '');
+    }
+  }
+}
+
+function getSharedWorker(): Worker {
+  if (sharedWorker) {
+    return sharedWorker;
+  }
+  sharedWorker = new Worker(new URL('../workers/ai.worker.ts', import.meta.url), { type: 'module' });
+  sharedWorker.onmessage = (event) => {
+    const message = event.data;
+    if (message.type === 'ready') {
+      sharedWorkerReady = true;
+    }
+    activeClients.forEach((client) => client.handleMessage(message));
+  };
+  return sharedWorker;
 }
