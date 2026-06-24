@@ -18,7 +18,7 @@ describe('React workspace artifact', () => {
       'Translation',
       'activeOutputTab',
       'emailActiveText',
-      'buildGmailComposeHref',
+      'chooseGmailComposeHref',
       "window.open(gmailUrl, '_blank')",
       'application/vnd.google-apps.document',
       "key: 'k8s', value: 'Kubernetes'",
@@ -35,9 +35,11 @@ describe('React workspace artifact', () => {
     expect(app).not.toContain(['Web', 'DAV'].join(''));
     expect(app).not.toContain(`Email (${['mail', 'to'].join('')}:)`);
     expect(app).toContain('<span>Email</span>');
-    expect(sync).toContain('mail.google.com/mail/?');
-    expect(sync).toContain("view: 'cm'");
-    expect(sync).toContain("body: `${document.polished_text}");
+    expect(sync).toContain('mail.google.com/mail/u/0/?');
+    expect(sync).toContain('googlegmail:///co?');
+    expect(sync).toContain("'https://mail.google.com/mail/u/0/?view=cm'");
+    expect(sync).toContain("'tf=1'");
+    expect(sync).toContain('`body=${encode(fields.body)}`');
     expect(styles).toContain('.destination-status.email-status');
   });
 

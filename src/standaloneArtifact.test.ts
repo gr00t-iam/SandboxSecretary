@@ -115,7 +115,9 @@ describe('standalone Sandbox Secretary artifact', () => {
 
   it('opens Gmail compose in a new browser tab instead of navigating the PWA with mailto', () => {
     [
-      'https://mail.google.com/mail/?view=cm&fs=1',
+      'https://mail.google.com/mail/u/0/?view=cm&fs=1&tf=1',
+      'googlegmail:///co?',
+      'chooseGmailComposeUrl',
       "window.open(gmailUrl, '_blank')",
       'encodeURIComponent'
     ].forEach((marker) => expect(html).toContain(marker));

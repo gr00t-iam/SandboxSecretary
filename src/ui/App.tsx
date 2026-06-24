@@ -37,7 +37,7 @@ import {
   withDefaultDriveCredentials
 } from '../services/defaultConfig';
 import { SecretaryStorage } from '../services/storage';
-import { buildGmailComposeHref, SyncManager } from '../services/sync';
+import { chooseGmailComposeHref, SyncManager } from '../services/sync';
 import { speakTextWithLocale } from '../services/speech';
 import { polishTranscript, translateText, translateTextOffline } from '../services/textProcessing';
 import { isGemmaLoading, isGemmaReady, isGemmaSupported, polishWithGemma, translateWithGemma, warmGemmaEngine } from '../services/gemmaEngine';
@@ -452,7 +452,7 @@ export function App(): JSX.Element {
       flash(`Nothing in ${activeOutputTab === 'translation' ? 'Translation' : 'Polished Text'} to email`);
       return;
     }
-    const gmailUrl = buildGmailComposeHref({
+    const gmailUrl = chooseGmailComposeHref({
       id: crypto.randomUUID(),
       raw_transcript: rawText,
       polished_text: text,

@@ -77,16 +77,46 @@ export class SyncManager {
 }
 
 export function buildGmailComposeHref(document: SecretaryDocument): string {
+  const fields = composeFields(document);
+  return [
+    'https://mail.google.com/mail/u/0/?view=cm',
+    'fs=1',
+    'tf=1',
+    `to=${encode(fields.recipient)}`,
+    `su=${encode(fields.subject)}`,
+    `body=${encode(fields.body)}`
+  ].join('&');
+}
+
+export function buildGmailAppComposeHref(document: SecretaryDocument): string {
+  const fields = composeFields(document);
+  return [
+    'googlegmail:///co?',
+    `to=${encode(fields.recipient)}`,
+    `subject=${encode(fields.subject)}`,
+    `body=${encode(fields.body)}`
+  ].join('&');
+}
+
+export function chooseGmailComposeHref(
+  document: SecretaryDocument,
+  userAgent = typeof navigator === 'undefined' ? '' : navigator.userAgent
+): string {
+  return /android|iphone|ipad|ipod|mobile/i.test(userAgent) ? buildGmailAppComposeHref(document) : buildGmailComposeHref(document);
+}
+
+function composeFields(document: SecretaryDocument): { recipient: string; subject: string; body: string } {
   const recipient =
     document.sync_destination.type === 'email' ? document.sync_destination.path_or_recipient : '';
-  const params = new URLSearchParams({
-    view: 'cm',
-    fs: '1',
-    to: recipient,
-    su: `Sandbox Secretary: ${document.title}`,
+  return {
+    recipient,
+    subject: `Sandbox Secretary: ${document.title}`,
     body: `${document.polished_text}\n\n---\nRaw transcript:\n${document.raw_transcript}`
-  });
-  return `https://mail.google.com/mail/?${params.toString().replace(/\+/g, '%20')}`;
+  };
+}
+
+function encode(value: string): string {
+  return encodeURIComponent(value);
 }
 
 async function sendGmailMessage(

@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from 'vitest';
 import { SecretaryStorage } from './storage';
-import { buildGmailComposeHref, SyncManager } from './sync';
+import { buildGmailAppComposeHref, buildGmailComposeHref, chooseGmailComposeHref, SyncManager } from './sync';
 
 describe('SyncManager', () => {
   it('creates a Gmail browser compose URL and marks the document as synced', async () => {
@@ -20,7 +20,7 @@ describe('SyncManager', () => {
     const result = await sync.flushPending();
 
     expect(result.synced).toBe(1);
-    expect(openGmailCompose.mock.calls[0][0]).toContain('https://mail.google.com/mail/?view=cm&fs=1');
+    expect(openGmailCompose.mock.calls[0][0]).toContain('https://mail.google.com/mail/u/0/?view=cm&fs=1&tf=1');
     expect(openGmailCompose.mock.calls[0][0]).toContain('to=ops%40example.test');
     expect(openGmailCompose.mock.calls[0][0]).toContain('body=%23%20Notes%0A%0ASend%20update.');
     const metrics = await storage.getMetrics();
@@ -40,9 +40,30 @@ describe('SyncManager', () => {
       title: 'Multiline'
     });
 
-    expect(href).toContain('https://mail.google.com/mail/?view=cm&fs=1');
+    expect(href).toContain('https://mail.google.com/mail/u/0/?view=cm&fs=1&tf=1');
     expect(href).toContain('body=polished%20line%20one%0Apolished%20line%20two');
     expect(href).not.toContain('mailto:');
+  });
+
+  it('builds a Gmail app compose deep link for mobile app handoff', () => {
+    const document = {
+      id: 'doc-1',
+      raw_transcript: 'raw line',
+      polished_text: 'polished line one\npolished & special?',
+      source_lang: 'en',
+      target_lang: 'en',
+      sync_status: 'pending' as const,
+      sync_destination: { type: 'email' as const, path_or_recipient: 'ops@example.test' },
+      timestamp: new Date().toISOString(),
+      title: 'Mobile Draft'
+    };
+
+    const appHref = buildGmailAppComposeHref(document);
+    expect(appHref).toContain('googlegmail:///co?');
+    expect(appHref).toContain('to=ops%40example.test');
+    expect(appHref).toContain('subject=Sandbox%20Secretary%3A%20Mobile%20Draft');
+    expect(appHref).toContain('body=polished%20line%20one%0Apolished%20%26%20special%3F');
+    expect(chooseGmailComposeHref(document, 'Mozilla/5.0 (iPhone; CPU iPhone OS 18_0 like Mac OS X)')).toBe(appHref);
   });
 
   it('leaves drive uploads pending when no OAuth token is available', async () => {
